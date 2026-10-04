@@ -724,11 +724,23 @@ HF는 `hidden_states`의 **마지막 항목에만 final norm을 적용해서** �
 
 ### 실행
 
+로컬 GPU라면:
+
 ```bash
 python3 scripts/build_decision_data.py
 python3 scripts/train_lora_tpu.py --model <경로> --data data/decision \
     --steps 2000 --batch 32 --rank 16 --dim 256
-python3 scripts/eval_lora.py --ckpt lora_head.npz --data data/eval/alphaxiv_multi.json
+python3 scripts/eval_lora.py --ckpt lora.npz --data data/eval/alphaxiv_multi.json
+```
+
+TPU는 [scripts/tpu_lora.sh](https://github.com/deep-diver/mini-jev/blob/main/scripts/tpu_lora.sh)가
+생성부터 정리까지 처리합니다. 가중치는 로컬 HF 캐시에서 올리므로 TPU에 토큰이 필요 없습니다.
+
+```bash
+scripts/tpu_lora.sh create && scripts/tpu_lora.sh setup && scripts/tpu_lora.sh push
+scripts/tpu_lora.sh train && scripts/tpu_lora.sh log
+scripts/tpu_lora.sh eval && scripts/tpu_lora.sh fetch
+scripts/tpu_lora.sh stop
 ```
 
 TPU v5e-1(gcloud `v5litepod-1`)과 T4에서 잰 속도입니다. JAX라 같은 코드가 양쪽에서 돕니다.

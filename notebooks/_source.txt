@@ -1,0 +1,794 @@
+@@MD
+# Gemma 3 270M으로 Jev 스타일 판단기 만들기
+
+Jev는 글을 쓰지 않는 의사결정 모델입니다. 상태를 넣으면 미리 선언해 둔 필드를 확률과 함께
+돌려줍니다. 생성이 없으니 파싱 에러도, 없는 필드를 지어내는 환각도 구조적으로 불가능합니다.
+
+같은 인터페이스를 270M 모델로 만들어 봅니다.
+
+| 방법 | 처음 보는 과제 AUC |
+|---|---|
+| 그냥 Yes/No 로짓 읽기 | 0.485 |
+| **LoRA + 학습된 헤드** | **0.821** |
+
+0.485는 동전 던지기입니다. 왜 그렇게 되는지 진단하고, 무엇을 해야 아닌지 만듭니다.
+
+**목차**
+
+1. jev 스타일 추론 — 생성하지 않는다
+2. 제대로 재보기
+3. 진단 — 출력 채널이 포화돼 있다
+4. 그래도 모델은 안다 (residual stream)
+5. 포인터 헤드
+6. 학습 데이터 설계
+7. LoRA 학습 (JAX / TPU)
+8. 결과
+
+1~4절은 CPU로 15분이면 돕니다. 5~7절은 GPU나 TPU가 필요하고, 표의 수치는 실제 실행 결과입니다.
+
+@@MD
+## 0. 준비
+
+Gemma는 gated 모델입니다. [모델 페이지](https://huggingface.co/google/gemma-3-270m-it)에서
+라이선스에 먼저 동의하세요.
+
+@@CODE
+!pip -q install -U "transformers>=4.50" accelerate
+
+@@CODE
+# 가중치가 이미 있으면 로그인이 필요 없습니다. Colab 보안 비밀은 UI 에서만 읽히고
+# CLI 세션에서는 긴 타임아웃 뒤 예외가 나므로, 대화형 로그인은 마지막 수단으로 둡니다.
+import os
+
+if os.environ.get("HF_HUB_OFFLINE") == "1":
+    print("오프라인 모드")
+elif os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN"):
+    print("환경변수 토큰 사용")
+else:
+    try:
+        from google.colab import userdata
+        os.environ["HF_TOKEN"] = userdata.get("HF_TOKEN")
+        print("Colab 보안 비밀 사용")
+    except Exception as e:
+        print(f"보안 비밀 없음 ({type(e).__name__}) — 로그인")
+        from huggingface_hub import notebook_login
+        notebook_login()
+
+@@CODE
+import time
+import numpy as np
+import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM
+
+MODEL = "google/gemma-3-270m-it"
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+tok = AutoTokenizer.from_pretrained(MODEL)
+if tok.pad_token is None:
+    tok.pad_token = tok.eos_token
+tok.padding_side = "right"
+model = AutoModelForCausalLM.from_pretrained(MODEL, dtype=torch.float32).to(device).eval()
+
+print(f"{sum(p.numel() for p in model.parameters()) / 1e6:.0f}M 파라미터 · "
+      f"{model.config.num_hidden_layers} layers · hidden {model.config.hidden_size} · "
+      f"vocab {model.config.vocab_size:,} · {device}")
+
+@@MD
+`vocab 262,144`를 기억해 두세요. 4절에서 다시 나옵니다.
+
+---
+## 1. jev 스타일 추론 — 생성하지 않는다
+
+보통 LLM을 쓰는 방식은 이렇습니다.
+
+```
+프롬프트 → forward → 샘플링 → 토큰 → forward → 샘플링 → ... → 문자열 → 파싱
+```
+
+토큰마다 forward를 돌리고, 끝나면 나온 문자열을 정규식으로 긁습니다. 느리고, 비결정적이고,
+파싱이 깨집니다.
+
+**jev 스타일은 답을 미리 좁혀 놓습니다.** "Yes나 No로만 답하라"고 해두면, 답의 첫 토큰이 나올
+자리의 확률 분포에 이미 답이 들어 있습니다. 그 자리에서 `Yes`와 `No` 토큰의 로짓만 꺼내
+비교하면 끝입니다.
+
+```
+프롬프트 → forward 한 번 → 후보 토큰의 로짓 비교 → 끝
+```
+
+- forward **1회**, 생성 루프 없음
+- 출력이 반드시 후보 중 하나 → 파싱 실패 없음
+- 샘플링이 없으니 **완전 결정적**
+- 확신도가 숫자로 공짜로 나옴
+
+@@CODE
+def build_prompt(user_content):
+    # Gemma 의 챗 템플릿. assistant 턴을 열어만 두고 비워 둔다.
+    return tok.apply_chat_template(
+        [{"role": "user", "content": user_content}],
+        tokenize=False, add_generation_prompt=True,
+    )
+
+# 대소문자 둘 다 후보로 둔다. 모델이 어느 쪽으로 쓰든 집어내기 위해서.
+YES = [tok.encode(s, add_special_tokens=False)[0] for s in ("Yes", "yes")]
+NO  = [tok.encode(s, add_special_tokens=False)[0] for s in ("No", "no")]
+print("Yes 토큰 id:", YES, " No 토큰 id:", NO)
+
+
+@torch.no_grad()
+def p_yes(content):
+    """forward 한 번. 로짓에서 바로 P(Yes) 를 읽는다."""
+    enc = tok(build_prompt(content), return_tensors="pt",
+              add_special_tokens=False).to(device)   # 템플릿이 이미 BOS 를 넣는다
+    logits = model(**enc).logits[0, -1].float()
+    pair = torch.stack([logits[YES].max(), logits[NO].max()])
+    return float(torch.softmax(pair, 0)[0])
+
+
+def noul(question, context=""):
+    return p_yes(f"State / Context:\n{context}\n\n"
+                 f"Question:\n{question}\n\n"
+                 f"Answer with Yes or No only.")
+
+
+for q in ["Is Paris the capital of France?",
+          "Is Paris the capital of Germany?",
+          "Is 7 greater than 3?",
+          "Is 3 greater than 7?"]:
+    print(f"{noul(q):.3f}   {q}")
+
+@@MD
+### 어...?
+
+참과 거짓이 **둘 다 0.98**입니다. 모델은 질문을 읽고 고르는 게 아니라 Yes를 누르고 있습니다.
+
+일단 미뤄 두고 나머지 원시 연산부터 봅시다. **후보 토큰 집합만 바꾸면** Yes/No가 아닌 것도
+읽힙니다. 선택지는 글자 `A`/`B`/`C`, 점수는 숫자 토큰 `1`~`5`를 후보로 둡니다.
+점수는 argmax 대신 **기댓값**을 쓰면 연속값이 나옵니다.
+
+@@CODE
+@torch.no_grad()
+def choice(question, options, context=""):
+    """선택지 글자의 로짓을 읽는다. 여전히 forward 한 번."""
+    listed = "\n".join(f"{chr(65 + i)}. {o}" for i, o in enumerate(options))
+    enc = tok(build_prompt(f"State / Context:\n{context}\n\nQuestion:\n{question}\n\n"
+                           f"Options:\n{listed}\n\nAnswer with the letter only."),
+              return_tensors="pt", add_special_tokens=False).to(device)
+    logits = model(**enc).logits[0, -1].float()
+    ids = [tok.encode(chr(65 + i), add_special_tokens=False)[0] for i in range(len(options))]
+    p = torch.softmax(logits[ids], 0)
+    return options[int(p.argmax())], [round(float(x), 3) for x in p]
+
+
+@torch.no_grad()
+def score(question, context="", lo=1, hi=5):
+    """숫자 토큰에 대한 기댓값. 생성 없이 연속값을 얻는다."""
+    enc = tok(build_prompt(f"State / Context:\n{context}\n\nQuestion:\n{question}\n\n"
+                           f"Answer with a single number from {lo} to {hi}."),
+              return_tensors="pt", add_special_tokens=False).to(device)
+    logits = model(**enc).logits[0, -1].float()
+    ids = [tok.encode(str(n), add_special_tokens=False)[0] for n in range(lo, hi + 1)]
+    p = torch.softmax(logits[ids], 0)
+    return float(sum(n * float(q) for n, q in zip(range(lo, hi + 1), p)))
+
+
+print(choice("What kind of element is this?",
+             ["navigation", "article body", "advertisement", "footer"],
+             context='<nav class="site-menu"> Home About Products Contact </nav>'))
+print(f"{score('How urgent is this?', context='The server is on fire'):.2f}  서버 화재")
+print(f"{score('How urgent is this?', context='Weekly newsletter'):.2f}  뉴스레터")
+
+@@MD
+`noul`, `choice`, `score` — 이 셋이 jev 인터페이스의 전부입니다. 전부 forward 한 번과
+후보 토큰 로짓 읽기로 끝납니다.
+
+그런데 셋 다 이상합니다. `choice`는 nav를 footer라고 하고, `score`는 서버 화재와 뉴스레터에
+같은 점수를 줍니다. 데모 몇 개로 단정하면 안 되니 제대로 재봅시다.
+
+---
+## 2. 제대로 재보기
+
+진짜 과제를 줍니다.
+
+> **웹페이지의 각 요소가, 사용자가 지금 찾고 있는 것과 맞는가?**
+
+조건이 하나 있습니다. **기준(criterion)이 런타임에 들어옵니다.** 사용자가 뭘 칠지 미리
+모릅니다. "스포츠 분류기"를 학습시켜 두는 식으로는 풀 수 없습니다.
+
+16개 주제 × 5문장으로 데이터를 만듭니다. 전부 실제 페이지에 있을 법한 평범한 텍스트입니다.
+
+@@CODE
+TOPICS = {
+    "ai":      ["Nvidia unveils new Blackwell GPU architecture for AI training",
+                "How large language models are changing software engineering",
+                "OpenAI releases a smaller, faster reasoning model",
+                "Quantization brings a 70B model onto a laptop",
+                "Benchmarking int8 inference on Apple silicon"],
+    "food":    ["Why chef Ferran Adria is the subject of a new documentary",
+                "A history of sourdough baking in northern Europe",
+                "The best ramen shops in the city, ranked",
+                "How to braise short ribs without drying them out",
+                "Fermentation basics: kimchi, miso and vinegar"],
+    "sport":   ["Manchester City beat Arsenal in a late comeback",
+                "The marathon world record falls again in Berlin",
+                "How a rookie point guard changed the season",
+                "Olympic swimming trials: who qualified overnight",
+                "Cycling team announces its Tour de France roster"],
+    "finance": ["Treasury yields climb as inflation data surprises",
+                "A startup raises $40M in a round led by Sequoia",
+                "Why the central bank held rates steady this month",
+                "Quarterly earnings beat expectations on cloud revenue",
+                "Retail investors pile into a newly listed company"],
+    "nature":  ["Weeping whales: stillborn humpback whale grieving documented",
+                "T. rex teeth indicate it ran as warm as an elephant",
+                "Bear-y good neighbours: humans and animals share a town",
+                "A coral reef recovers faster than anyone predicted",
+                "Migrating birds navigate using a magnetic sense"],
+    "health":  ["Finding the cells that put our brain to sleep",
+                "A new trial for a once-weekly diabetes drug",
+                "Why sleep debt cannot simply be repaid at the weekend",
+                "Physiotherapy beats surgery for some knee injuries",
+                "Vitamin D supplements show no effect in a large study"],
+    "travel":  ["Forty-eight hours in Lisbon on a small budget",
+                "The sleeper train returning to central Europe",
+                "How to avoid the crowds at the summer festivals",
+                "A walking route along the old pilgrim path",
+                "Visa rules change for long-stay travellers"],
+    "auto":    ["Don't call it an SUV: the Ferrari Purosangue review",
+                "An electric hatchback that finally undercuts petrol",
+                "Why solid-state batteries keep slipping a year",
+                "Used car prices fall for the third quarter running",
+                "A hands-on with the new hybrid drivetrain"],
+    "music":   ["A jazz quartet reunites after thirty years apart",
+                "The album that defined a decade of British pop",
+                "Vinyl sales overtake CDs for the first time since 1987",
+                "How a bedroom producer topped the streaming chart",
+                "Orchestra announces its season of late romantics"],
+    "film":    ["A quiet drama wins the top prize at the festival",
+                "The sequel nobody asked for is surprisingly good",
+                "How practical effects made a comeback this year",
+                "Director discusses the ten-year road to release",
+                "Box office returns to pre-pandemic levels"],
+    "politics": ["Parliament votes down the housing amendment",
+                 "A coalition forms after three weeks of talks",
+                 "The mayor announces a transit funding plan",
+                 "Election turnout rises in rural districts",
+                 "New rules on lobbying take effect in January"],
+    "education": ["Universities rethink the lecture after a decade of decline",
+                  "A school district pilots a four-day week",
+                  "Tuition freezes extended for another year",
+                  "How apprenticeships are filling the skills gap",
+                  "Reading scores recover slowly after the pandemic"],
+    "fashion": ["Readers on their favourite second-hand fashion finds",
+                "The return of tailoring on the autumn runway",
+                "Why the sneaker resale market finally cooled",
+                "A label built entirely on deadstock fabric",
+                "Fashion week moves to a smaller venue"],
+    "gaming":  ["An indie roguelike tops the charts on launch day",
+                "The studio delays its open-world title again",
+                "Handheld consoles are having a second moment",
+                "Speedrunners break a record thought unbeatable",
+                "A remaster that respects the original's pacing"],
+    "space":   ["Rings around a tiny body have changed over the past decade",
+                "The lander touches down near the lunar south pole",
+                "A telescope spots the earliest galaxy yet",
+                "Launch cadence doubles at the coastal pad",
+                "Astronauts complete a six-hour spacewalk"],
+    # 어떤 주제에도 속하지 않으므로 모든 기준에 대해 음성.
+    "boiler":  ["Subscribe to our newsletter for weekly updates",
+                "Terms of Use  Privacy Policy  Contact us",
+                "We process your data to deliver content or advertisements",
+                "Sign in to continue reading this article",
+                "Accept all cookies to continue browsing"],
+}
+
+CRITERIA = {
+    "ai": "This is about AI, machine learning, or computer chips.",
+    "food": "This is about cooking, restaurants, or food.",
+    "sport": "This is about sports or athletes.",
+    "finance": "This is about money, markets, or business finance.",
+    "nature": "This is about animals or the natural world.",
+    "health": "This is about health, medicine, or the human body.",
+    "travel": "This is about travel or places to visit.",
+    "auto": "This is about cars or vehicles.",
+    "music": "This is about music or musicians.",
+    "film": "This is about films or cinema.",
+    "politics": "This is about politics or government.",
+    "education": "This is about schools, universities, or education.",
+    "fashion": "This is about fashion or clothing.",
+    "gaming": "This is about video games.",
+    "space": "This is about space or astronomy.",
+}
+
+ITEMS = [(topic, text) for topic, texts in TOPICS.items() for text in texts]
+print(f"{len(ITEMS)} items × {len(CRITERIA)} criteria = {len(ITEMS) * len(CRITERIA)} forward passes")
+
+@@MD
+한 번의 forward에서 **로짓과 은닉 상태를 같이** 뽑아 둡니다. 4절에서 쓸 재료를 지금 챙기는 겁니다.
+
+@@CODE
+def build_content(text, criterion):
+    return (f'State / Context:\nElement: <a>\nText: "{text}"\n\n'
+            f'Question:\nThe user is looking for: {criterion}\n\n'
+            f'Does this page element match what the user is looking for?\n\n'
+            f'Answer with Yes or No only.')
+
+
+@torch.no_grad()
+def forward_batch(prompts):
+    # 오른쪽 패딩이라 답의 위치가 행마다 다르다. -1 이 아니라 각 행의 마지막 '실제' 토큰을 읽는다.
+    enc = tok(prompts, return_tensors="pt", padding=True,
+              add_special_tokens=False).to(device)
+    last = enc["attention_mask"].sum(1) - 1
+    rows = torch.arange(len(prompts), device=device)
+
+    out = model(**enc, output_hidden_states=True)
+    logits = out.logits[rows, last].float()
+    pair = torch.stack([logits[:, YES].max(1).values, logits[:, NO].max(1).values], 1)
+
+    # (batch, n_layers+1, hidden): 모든 레이어를, 답의 위치에서.
+    states = torch.stack([h[rows, last] for h in out.hidden_states], 1)
+    return torch.softmax(pair, 1)[:, 0].cpu().numpy(), states.float().cpu().numpy()
+
+
+prompts, labels, crits = [], [], []
+for ckey, criterion in CRITERIA.items():
+    for topic, text in ITEMS:
+        prompts.append(build_prompt(build_content(text, criterion)))
+        labels.append(1 if topic == ckey else 0)
+        crits.append(ckey)
+
+ps, states = [], []
+t0 = time.time()
+for i in range(0, len(prompts), 16):
+    p, h = forward_batch(prompts[i:i + 16])
+    ps.append(p)
+    states.append(h)
+ps, states = np.concatenate(ps), np.concatenate(states)
+labels, crits = np.array(labels), np.array(crits)
+print(f"{len(ps)} passes in {time.time() - t0:.0f}s · states {states.shape}")
+
+@@MD
+### 지표 고르기
+
+정확도를 쓰면 안 됩니다. 양성이 1/16뿐이라 **전부 No라고만 해도 94%**가 나옵니다.
+
+AUC는 "무작위로 고른 양성이 무작위로 고른 음성보다 높은 점수를 받을 확률"입니다.
+0.5가 동전, 1.0이 완벽이고, 양성 비율이 치우쳐도 속지 않습니다. 그리고 점수 전체를
+**일정하게 밀어도 변하지 않습니다** — 순위만 보기 때문입니다.
+
+@@CODE
+def auc(scores, y):
+    npos, nneg = int((y == 1).sum()), int((y == 0).sum())
+    order = np.argsort(scores, kind="mergesort")
+    ranks = np.empty(len(scores)); ranks[order] = np.arange(1, len(scores) + 1)
+    return (ranks[y == 1].sum() - npos * (npos + 1) / 2) / (npos * nneg)
+
+
+print(f"P(Yes)  최소 {ps.min():.4f}  중앙값 {np.median(ps):.4f}  최대 {ps.max():.4f}")
+print(f"        양성 평균 {ps[labels == 1].mean():.4f}  음성 평균 {ps[labels == 0].mean():.4f}")
+print(f"\nAUC {auc(ps, labels):.3f}")
+
+@@MD
+**0.575.** 모든 답이 0.998 언저리입니다. "우주에 관한 글인가?"라고 묻고 갈비찜 레시피를
+보여줘도 Yes라고 합니다.
+
+실제 웹페이지에서도 같습니다. alphaXiv 논문 제목 179편에 직접 라벨을 달아 재면
+A(강화학습) 0.573 · B(영상) 0.588 · C(수학/물리) 0.304, **평균 0.485**입니다.
+
+---
+## 3. 진단 — 출력 채널이 포화돼 있다
+
+"270M이라 그렇지"로 넘어가면 아무것도 못 배웁니다. 가능한 원인을 하나씩 지웁니다.
+
+| 의심 | 지우는 방법 |
+|---|---|
+| 토큰 id나 프롬프트 형식이 틀림 | 같은 모델로 그냥 **생성**시켜 본다 |
+| 가중치가 망가짐 | 위와 동일 |
+| 엉뚱한 두 토큰을 비교 중 | 그 자리의 **분포 전체**를 본다 |
+| 표현의 문제 | **극성을 뒤집어** 본다 |
+
+@@CODE
+print("[1] 가중치와 프롬프트는 멀쩡한가 — 그냥 생성시켜 본다")
+for q in ["The capital of France is", "2 + 2 ="]:
+    enc = tok(build_prompt(q), return_tensors="pt", add_special_tokens=False).to(device)
+    out = model.generate(**enc, max_new_tokens=8, do_sample=False)
+    print("    ", repr(tok.decode(out[0, enc["input_ids"].shape[1]:], skip_special_tokens=True)))
+
+print("\n[2] 극성을 뒤집으면 답도 뒤집히는가")
+for q in ["Is Paris the capital of Germany?", "Is Paris NOT the capital of Germany?"]:
+    print(f"     P(Yes) {noul(q):.4f}   {q}")
+
+@@MD
+생성은 `Paris.`와 `4`를 정확히 내놓습니다. 가중치도 토크나이저도 프롬프트 형식도 멀쩡합니다.
+그런데 극성을 뒤집어도 답은 Yes입니다.
+
+그래도 찜찜한 게 남습니다. 모델이 실은 `"Sure"`나 `"The"`를 뱉으려 하는데 우리가 엉뚱한 두
+토큰만 비교하고 있다면 그 비율은 아무 의미가 없습니다. **그 자리의 분포 전체**를 봐야 합니다.
+
+@@CODE
+print("[3] 우리가 로짓을 잘못 읽고 있는 건 아닌가")
+for s in ("Yes", "No"):
+    i = tok.encode(s, add_special_tokens=False)
+    print(f"     {s!r} -> id {i}, 되돌리면 {[tok.decode([x]) for x in i]!r}")
+
+enc = tok(build_prompt("Is Paris the capital of Germany? Answer with Yes or No only."),
+          return_tensors="pt", add_special_tokens=False).to(device)
+print(f"     프롬프트 토큰 {enc['input_ids'].shape[1]}개, 끝 4개 "
+      f"{[tok.decode([i]) for i in enc['input_ids'][0, -4:].tolist()]}")
+
+with torch.no_grad():
+    probs = torch.softmax(model(**enc).logits[0, -1].float(), 0)
+top = torch.topk(probs, 6)
+print("\n     답 자리의 top-6:")
+for i, v in zip(top.indices.tolist(), top.values.tolist()):
+    print(f"       {tok.decode([i])!r:18} {v:.4f}")
+print(f"\n     Yes/No 두 토큰이 가진 확률 질량: "
+      f"{float(probs[YES].max() + probs[NO].max()) * 100:.2f}%")
+
+@@MD
+**Yes와 No가 확률의 100%를 가져갑니다.** 제3의 토큰으로 새는 게 아닙니다 —
+모델은 정확히 그 둘 중에서 고르고 있고, 틀린 쪽을 고릅니다. 읽는 방식의 문제가 아닙니다.
+
+마지막으로 표현 탓인지 봅니다.
+
+@@CODE
+PAIRS = [("Paris is the capital of France.", True),
+         ("Paris is the capital of Germany.", False),
+         ("The sun rises in the east.", True),
+         ("The sun rises in the west.", False),
+         ("Fish can breathe underwater.", True),
+         ("Fish can breathe in outer space.", False)]
+
+VARIANTS = {
+    "질문형":   lambda s: f"Is the following statement true?\n\n{s}\n\nAnswer with Yes or No only.",
+    "사실확인": lambda s: f"Statement: {s}\n\nIs this statement factually correct? Answer Yes or No.",
+    "극성반전": lambda s: f"Statement: {s}\n\nIs this statement FALSE? Answer Yes or No.",
+    "간결":     lambda s: f"{s}\nTrue or false? Answer with Yes if true, No if false.",
+}
+
+print(f"{'표현':10s} {'정확도':>7s} {'참 평균':>9s} {'거짓 평균':>10s} {'분리도':>9s}")
+for name, shape in VARIANTS.items():
+    sc = [(p_yes(shape(s)), t) for s, t in PAIRS]
+    acc = sum((p > 0.5) == t for p, t in sc) / len(sc)
+    tp = np.mean([p for p, t in sc if t]); fp = np.mean([p for p, t in sc if not t])
+    print(f"{name:10s} {acc:7.0%} {tp:9.3f} {fp:10.3f} {tp - fp:+9.3f}")
+
+@@MD
+네 표현 모두 **정확도 50%**, 분리도는 소수점 셋째 자리에서 놉니다.
+JSON으로 생성시켜도 같습니다 — 문법은 완벽한데(파싱 실패 0건) 논문 제목 179편 **전부**
+`{"relevant": true}`를 내놓습니다.
+
+> **진단: 출력 채널이 포화돼 있습니다.** 이 크기의 instruct 모델은 "지시를 따라 Yes/No 중
+> 하나를 고르는" 습관이 약하고, 262,144차원으로 투영하는 마지막 행렬이 그 미세한 차이를
+> 덮어버립니다. 형식을 바꿔도(JSON), 표현을 바꿔도 같습니다.
+
+그러면 질문이 하나 남습니다. **모델은 답을 모르는 걸까, 말을 못 하는 걸까?**
+
+---
+## 4. 그래도 모델은 안다 (residual stream)
+
+Transformer의 각 레이어는 residual stream이라는 벡터에 정보를 쌓아 올립니다.
+마지막에 LM head가 그 벡터를 262,144차원 어휘 공간으로 투영해 다음 토큰 확률을 만듭니다.
+
+우리가 지금까지 본 건 **투영 이후**입니다. 투영 **이전**을 직접 보면 어떨까요?
+
+읽는 도구는 **선형 프로브** — 은닉 벡터에 가중치를 내적해 점수 하나를 냅니다.
+학습 파라미터는 `hidden_size + 1 = 641`개뿐이고 닫힌 해로 1초면 풉니다.
+"이 정보가 선형으로 분리 가능한 형태로 들어 있는가"를 묻는 표준 도구입니다.
+
+### 평가 설계
+
+기준은 **사용자가 런타임에 타이핑**합니다. 그러니 프로브가 **한 번도 본 적 없는 기준**에서의
+성능만 의미가 있습니다. "space"로 학습한 프로브를 "space"로 평가하면 그건 *우주 분류기를
+외웠는지*를 재는 것이지 우리가 알고 싶은 게 아닙니다.
+
+**leave-one-criterion-out**: 15개 중 14개로 학습하고 나머지 1개로 평가, 15번 반복.
+
+@@CODE
+def fit(X, y, ridge):
+    """+-1 타깃에 대한 릿지 최소제곱. 닫힌 해라 그래디언트가 없다.
+
+    bias 열은 일부러 패널티에서 뺀다. 줄이면 모든 점수를 0 쪽으로 끌 뿐이다.
+    """
+    A = np.c_[X, np.ones(len(X))]
+    R = ridge * np.eye(A.shape[1]); R[-1, -1] = 0.0
+    return np.linalg.solve(A.T @ A + R, A.T @ (y * 2.0 - 1.0))
+
+
+def loco_auc(H, y, groups, ridge=100.0):
+    mu = H.mean(0)
+    X = (H - mu) / ((H - mu).std(0) + 1e-6)
+    out = np.zeros(len(y))
+    for g in np.unique(groups):
+        te = groups == g
+        w = fit(X[~te], y[~te], ridge)
+        out[te] = np.c_[X[te], np.ones(te.sum())] @ w
+    return float(np.mean([auc(out[groups == g], y[groups == g])
+                          for g in np.unique(groups)]))
+
+
+n_layers = states.shape[1]
+layer_auc = [loco_auc(states[:, L].astype(np.float64), labels, crits)
+             for L in range(n_layers)]
+best = int(np.argmax(layer_auc))
+for L in range(n_layers):
+    print(f"  layer {L:2d}   AUC {layer_auc[L]:.3f}" + ("  ←" if L == best else ""))
+print(f"\nYes/No readout 은 {auc(ps, labels):.3f}")
+
+@@CODE
+import matplotlib.pyplot as plt
+
+# 그림 안 텍스트는 영문으로 둡니다. 기본 Colab 런타임에 한글 폰트가 없어 네모로 깨집니다.
+PROBE, MUTED, INK, GRID = "#3b6fd4", "#9a9a94", "#2b2b28", "#e8e8e4"
+
+fig, ax = plt.subplots(figsize=(8, 4.2), dpi=130)
+ax.plot(range(n_layers), layer_auc, color=PROBE, lw=2, marker="o", ms=4.5,
+        markeredgecolor="white", markeredgewidth=1.0, zorder=3)
+base = auc(ps, labels)
+ax.axhline(base, color=MUTED, lw=1.4, ls=(0, (4, 3)), zorder=2)
+ax.annotate(f"Yes/No logit readout   {base:.3f}", xy=(7.6, base - 0.085),
+            color=MUTED, fontsize=9)
+ax.scatter([best], [layer_auc[best]], s=110, facecolor="none",
+           edgecolor=PROBE, lw=1.6, zorder=4)
+ax.annotate(f"layer {best}  ·  {layer_auc[best]:.3f}",
+            xy=(best + 0.55, layer_auc[best] - 0.13),
+            color=PROBE, fontsize=10, fontweight="bold")
+ax.set_title("Linear probe on the residual stream, by layer (leave-one-criterion-out)",
+             fontsize=11, color=INK, pad=12, loc="left")
+ax.set_xlabel("residual stream layer", fontsize=9, color=MUTED)
+ax.set_ylabel("AUC", fontsize=9, color=MUTED)
+ax.set_ylim(0.0, 1.05); ax.set_xlim(-0.6, n_layers - 0.4)
+ax.set_xticks(range(0, n_layers, 2))
+ax.grid(axis="y", color=GRID, lw=0.8); ax.set_axisbelow(True)
+for s in ("top", "right"): ax.spines[s].set_visible(False)
+for s in ("left", "bottom"): ax.spines[s].set_color(GRID)
+ax.tick_params(colors=MUTED, labelsize=9)
+plt.tight_layout(); plt.show()
+
+@@MD
+**모델은 답을 알고 있었습니다.** 출력 채널에서 0.575인 것이 중간 레이어에서는 0.97대입니다.
+
+곡선을 읽어 둘 만합니다. 초반은 아직 표면적인 토큰 정보라 약하고, 5번째 즈음 의미가 정리되며
+급격히 올라가 중반에서 정점을 찍습니다. 후반은 "다음 토큰으로 뭘 뱉을까"에 맞춰 재배치되면서
+우리가 원하는 축이 흐려지고, 그 끝의 LM head가 나머지를 마저 뭉갭니다.
+
+> **layer 1이 0.5가 아니라 0.045인 건 왜일까요?** 0.5 아래는 "정보가 없다"가 아니라
+> **방향이 뒤집혔다**는 뜻입니다. 14개 기준으로 찾은 방향이 15번째에서 반대를 가리킵니다.
+> 일반화가 안 되는 것이지, 거꾸로 쓰면 되는 공짜 신호가 아닙니다.
+
+여기까지가 진단입니다. **정보는 모델 안에 있고, 출력 채널만 막혀 있습니다.**
+그러니 해야 할 일은 분명합니다 — **읽는 장치를 따로 학습시키는 것.**
+
+---
+## 5. 포인터 헤드
+
+선형 프로브는 "이 기준에 맞는가"라는 **고정된 질문 하나**만 풉니다. 우리가 필요한 건 옵션이
+호출마다 바뀌는 인터페이스입니다.
+
+**포인터 헤드**가 그걸 합니다. 옵션마다 마커를 붙여 한 시퀀스에 넣고, `Decision:` 위치의
+은닉 상태를 **query**, 각 마커의 은닉 상태를 **key**로 삼아 내적합니다.
+
+```
+State:
+<텍스트>
+
+Question: <지시>
+Options:
+첫 번째 옵션 <0>      ← key
+두 번째 옵션 <1>      ← key
+Decision:            ← query
+```
+
+`logit_i = <W_q h_decision, W_k h_option_i> / √d`
+
+가중치가 옵션의 *내용*이 아니라 *표현*에 걸리므로 후보 집합이 고정될 필요가 없습니다.
+런타임에 뭐든 받고, `noul`/`choice`/`score`를 한 구조로 처리합니다.
+(이 설계는 [kev](https://github.com/jaredpalmer/kev)의 것을 따랐습니다.)
+
+**마커는 반드시 옵션 뒤에 둬야 합니다.** 어텐션이 causal이라 앞에 두면 그 마커는
+자기 옵션을 보지 못합니다.
+
+@@CODE
+import torch.nn as nn
+
+def render(state, instructions, options):
+    lines = [f"State:\n{state}\n", f"Question: {instructions}", "Options:"]
+    for i, o in enumerate(options):
+        lines.append(f"{o} <{i}>")      # 마커가 옵션 뒤
+    lines.append("Decision:")
+    return "\n".join(lines)
+
+
+class PointerHead(nn.Module):
+    def __init__(self, hidden, dim=256):
+        super().__init__()
+        self.q = nn.Linear(hidden, dim, bias=False)
+        self.k = nn.Linear(hidden, dim, bias=False)
+        self.norm = nn.LayerNorm(hidden)
+        self.dim = dim
+
+    def forward(self, states, mask):
+        # states: (B, 1 + n_options, hidden) — 0 번이 query, 나머지가 key
+        x = self.norm(states)
+        q = self.q(x[:, 0])
+        k = self.k(x[:, 1:])
+        logits = (k @ q.unsqueeze(-1)).squeeze(-1) / self.dim ** 0.5
+        return logits.masked_fill(~mask, -1e4)
+
+
+print(render("Shoes arrived late and in the wrong size.",
+             "Which team should handle this?",
+             ["Returns and refunds", "Shipping", "Billing"]))
+print(f"\n헤드 파라미터: {sum(p.numel() for p in PointerHead(640).parameters()):,}")
+
+@@MD
+> **temperature 피팅**은 모든 Jev 구현이 하는 마무리입니다. 원시 확신도는 체계적으로 높게
+> 나오므로, 홀드아웃 라벨로 스칼라 하나를 맞춰 로짓을 나눠 줍니다. 순위(AUC)는 안 바뀌고
+> **보정(ECE)**만 좋아집니다. 임계값으로 자르는 제품에서는 이게 성능만큼 중요합니다.
+
+---
+## 6. 학습 데이터 설계
+
+여기가 결과를 가장 크게 좌우합니다. 규칙 하나로 요약됩니다.
+
+> **음성은 반드시 같은 코퍼스의 다른 클래스에서 뽑는다.**
+
+음성을 쿠키 배너나 약관 같은 보일러플레이트로 채우면, 모델은 "주제가 맞는가"가 아니라
+**"내용이 있는 글인가 vs 껍데기인가"**를 배웁니다. 그 축은 합성 데이터에서는 잘 맞지만
+모든 항목이 논문 제목인 페이지에서는 평평합니다. 같은 종류의 다른 주제를 음성으로 써야
+모델이 과제를 배웁니다.
+
+9개 공개 코퍼스(ag_news, dbpedia, yahoo, 20newsgroups, clinc, banking77, emotion, sst5, yelp),
+292개 클래스에서 **43,629건**을 만들었습니다. 논문·초록 데이터는 **일부러 뺐습니다** —
+평가가 alphaXiv 논문 제목이라 그게 out-of-domain으로 남아야 의미가 있습니다.
+
+| 타입 | 건수 | 형식 |
+|---|---|---|
+| noul | 28,602 | 자연어 기준 + Yes/No |
+| choice | 14,428 | 그 코퍼스의 라벨들 |
+| score | 599 | 순서가 있는 라벨 |
+
+기준 문장은 템플릿 6종으로 흔들어서, 헤드가 과제가 아니라 한 문장을 외우지 않게 합니다.
+
+@@CODE
+# 핵심만. 전체는 scripts/build_decision_data.py
+import random
+
+CRITERION_TEMPLATES = ["This is about {}.", "The user is looking for: {}",
+                       "Is this relevant to someone interested in {}?",
+                       "I want to see things about {}.",
+                       "Show me content about {}.", "{}"]
+
+
+def make_noul(rng, text, cls, classes, pos_rate=0.35):
+    match = rng.random() < pos_rate
+    # 핵심 한 줄: 음성은 같은 코퍼스의 다른 클래스.
+    topic = cls if match else rng.choice([c for c in classes if c != cls])
+    crit = rng.choice(CRITERION_TEMPLATES).format(topic)
+    return {"state": text,
+            "instructions": f"{crit}\n\nDoes this match what the user is looking for?",
+            "options": ["Yes", "No"], "gold": 0 if match else 1}
+
+
+rng = random.Random(0)
+classes = ["space", "sports", "cooking", "finance"]
+for _ in range(3):
+    d = make_noul(rng, "The lander touches down near the lunar south pole.", "space", classes)
+    print(f"{d['instructions'].splitlines()[0]:58s} → {d['options'][d['gold']]}")
+
+@@MD
+---
+## 7. LoRA 학습 (JAX / TPU)
+
+헤드만 학습시키면 백본이 **이미 주는** 표현을 읽기만 합니다. 표현 자체를 과제 쪽으로 움직이려면
+백본도 건드려야 하는데, 전체 파인튜닝은 268M을 다 바꿉니다. **LoRA**는 각 가중치 행렬 옆에
+저차원 행렬 두 개를 붙여 그 합만 학습합니다.
+
+```
+W x  →  W x + (B A) x        A: (r, in),  B: (out, r),  r = 16
+```
+
+`B`를 0으로 초기화하면 처음엔 완전한 항등이라 원래 모델에서 출발합니다. 어텐션 projection
+네 곳(q/k/v/o)에 걸면 학습 파라미터는 **LoRA 1,474,560 + 헤드 328,960 = 1,803,520,
+모델의 0.67%**입니다.
+
+@@CODE
+# 핵심만. 전체는 scripts/train_lora_tpu.py
+SNIPPET = '''
+def dense(x, W, a, b, scale):
+    return jnp.dot(x, W.T) + scale * jnp.dot(jnp.dot(x, a.T), b.T)   # W 는 동결
+
+# 레이어는 scan 으로 접는다. 18개를 파이썬 for 로 펼치면 HLO 가 커져 컴파일이 호스트
+# 메모리를 먹는다. scan 은 레이어 본문 하나만 컴파일하고, @jax.checkpoint 는 활성화를
+# 다시 계산해 메모리를 더 줄인다.
+@jax.checkpoint
+def layer(x, p):
+    w, lo, full = p
+    q = dense(h, w["self_attn.q_proj.weight"], lo["q_A"], lo["q_B"], scale)
+    ...
+    return x, None
+
+x, _ = jax.lax.scan(layer, x, (stacked, lora, is_full))
+return rms_norm(x, final_norm)
+'''
+print(SNIPPET)
+
+@@MD
+### 직접 구현한 forward는 반드시 대조하세요
+
+JAX로 모델을 다시 쓰면 조용히 틀리기 쉽습니다. LoRA를 끈 상태(`B=0`이라 항등)로
+HuggingFace와 비교하는 게 유일하게 확실한 방법입니다. 주의할 점이 하나 있는데,
+HF는 `hidden_states`의 **마지막 항목에만 final norm을 적용해서** 넣습니다. 맞춰 주면
+**cosine 1.000000, 최대 차이 2e-4**로 일치합니다.
+
+### 실행
+
+```bash
+python3 scripts/build_decision_data.py
+python3 scripts/train_lora_tpu.py --model <경로> --data data/decision \
+    --steps 2000 --batch 32 --rank 16 --dim 256
+python3 scripts/eval_lora.py --ckpt lora_head.npz --data data/eval/alphaxiv_multi.json
+```
+
+TPU v5e-1(gcloud `v5litepod-1`)과 T4에서 잰 속도입니다. JAX라 같은 코드가 양쪽에서 돕니다.
+
+| 하드웨어 | s/step | 6000스텝 |
+|---|---|---|
+| TPU v5e-1 (batch 32) | 0.082 | 8분 |
+| T4 (batch 16) | 0.95 | 95분 |
+
+---
+## 8. 결과
+
+LoRA가 정말 기여하는지 보려면 **다른 걸 전부 고정**해야 합니다. 같은 데이터, 같은 스텝(2000),
+같은 배치(32), 같은 헤드. LoRA만 껐다 켭니다.
+
+| | In-domain dev | **처음 보는 과제 AUC** |
+|---|---|---|
+| 헤드만 | 0.695 | 0.475 |
+| **LoRA + 헤드** | **0.877** | **0.821** |
+
+기준별로도 전부 올랐습니다: A 0.669→0.729, B 0.556→0.858, C 0.198→0.877.
+
+처음 보는 과제(alphaXiv 논문 제목 179편 × 기준 3개, 학습에 전혀 없던 도메인)에서
+**0.485 → 0.821**입니다.
+
+### 더 오래 = 더 좋음이 아닙니다
+
+| 스텝 | In-domain dev | 처음 보는 과제 AUC |
+|---|---|---|
+| 2000 | 0.877 | **0.821** |
+| 6000 | 0.887 | 0.724 |
+
+in-domain은 오르는데 전이는 떨어집니다. 그래서 **모델 선택을 in-domain dev로 하면
+전이가 가장 나쁜 지점을 고르게 됩니다.** 체크포인트는 held-out **과제**로 고르세요.
+
+@@MD
+---
+## 정리
+
+1. **작은 모델에 지시를 따르게 하지 마세요.** `Yes`/`No` 로짓은 포화돼 있고, JSON으로 바꿔도
+   179편 전부 `true`가 나옵니다. 형식의 문제가 아닙니다.
+2. **출력이 막혔다고 모델이 모르는 게 아닙니다.** LM head 이전의 residual stream을 보세요.
+   641개 파라미터 프로브로 확인됩니다.
+3. **그러니 읽는 장치를 학습시키세요.** 포인터 헤드는 옵션이 바뀌어도 되므로
+   `noul`/`choice`/`score`를 한 구조로 처리합니다.
+4. **학습 데이터의 음성이 결과를 정합니다.** 같은 종류의 다른 주제여야 합니다.
+5. **런타임 입력은 held-out으로.** 모델 선택도 거기서 하세요.
+6. **더 오래 학습한다고 좋아지지 않습니다.**
+
+### 연습 문제
+
+1. `best` 레이어를 바꿔 가며 끝에서 끝까지 성능이 어떻게 변하는지 보세요.
+2. `ridge`를 1 / 100 / 10000으로 바꿔 LOCO AUC를 비교하세요. 왜 큰 값이 필요할까요?
+3. 선형 프로브 대신 작은 MLP를 올리면 LOCO AUC가 오를까요? (힌트: 기준이 held-out이라는 점)
+4. 6절의 규칙을 깨 보세요 — 음성을 보일러플레이트로만 바꾸고 재학습하면 숫자가 어떻게 될까요?
+5. 옵션 순서를 뒤집어 두 결과를 평균내는 `permutations=2`를 구현하고 ECE를 재보세요.
+
+### 코드
+
+[build_decision_data.py](https://github.com/deep-diver/mini-jev/blob/main/scripts/build_decision_data.py) ·
+[pointer_head.py](https://github.com/deep-diver/mini-jev/blob/main/scripts/pointer_head.py) ·
+[train_lora_tpu.py](https://github.com/deep-diver/mini-jev/blob/main/scripts/train_lora_tpu.py) ·
+[eval_lora.py](https://github.com/deep-diver/mini-jev/blob/main/scripts/eval_lora.py)

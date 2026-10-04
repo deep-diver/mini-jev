@@ -1,0 +1,1076 @@
+[
+ {
+  "i": 0,
+  "title": "World Motion Models: Flexible Sequence Modeling of SE(3) Trajectories",
+  "label": 0,
+  "score": 0.901
+ },
+ {
+  "i": 1,
+  "title": "Tokenization: A Survey for Modern NLP",
+  "label": 0,
+  "score": 0.825
+ },
+ {
+  "i": 2,
+  "title": "Learning Functional Subspaces for Neural Network Compression",
+  "label": 0,
+  "score": 0.826
+ },
+ {
+  "i": 3,
+  "title": "AutoCompact: Learning When to Compact Context in Long-Horizon Coding Agents",
+  "label": 1,
+  "score": 0.807
+ },
+ {
+  "i": 4,
+  "title": "Gemini 4 Argon: our next era of frontier intelligence",
+  "label": 0,
+  "score": 0.569
+ },
+ {
+  "i": 5,
+  "title": "Invent a Dataset: Measuring Dataset Generation Abilities with Zero Seed Data",
+  "label": 0,
+  "score": 0.485
+ },
+ {
+  "i": 6,
+  "title": "When Do Biological Reasoning Models Use Their Biological Inputs?",
+  "label": 0,
+  "score": 0.789
+ },
+ {
+  "i": 7,
+  "title": "Recova: Agent-Guided Failure Recovery for Autonomous Robotic Manipulation",
+  "label": 1,
+  "score": 0.679
+ },
+ {
+  "i": 8,
+  "title": "Local Support Learning",
+  "label": 0,
+  "score": 0.843
+ },
+ {
+  "i": 9,
+  "title": "The Three-Level Posterior Tower: Hierarchical Bayesian Inference and Mixed Distributive Laws",
+  "label": 0,
+  "score": 0.853
+ },
+ {
+  "i": 10,
+  "title": "From Gradients to Capabilities: Understanding Multi-Teacher On-Policy Distillation",
+  "label": 0,
+  "score": 0.919
+ },
+ {
+  "i": 11,
+  "title": "Latent JEPA: Abstract Future Prediction for Latent Reasoning in Chemistry",
+  "label": 0,
+  "score": 0.808
+ },
+ {
+  "i": 12,
+  "title": "Tactile Curiosity Drives Robot Interaction",
+  "label": 1,
+  "score": 0.197
+ },
+ {
+  "i": 13,
+  "title": "EgoFound3R: End-to-End Egocentric Hand Reconstruction in World Space with Point-Wise Interaction Attributes",
+  "label": 0,
+  "score": 0.701
+ },
+ {
+  "i": 14,
+  "title": "Oneira: From Open-Ended Generation to Open-World Interaction in Video World Models",
+  "label": 0,
+  "score": 0.877
+ },
+ {
+  "i": 15,
+  "title": "Generative Cinematographer: Composing Camera and Object Motion in 3D",
+  "label": 0,
+  "score": 0.48
+ },
+ {
+  "i": 16,
+  "title": "A Six-Parameter Extension of the Direct Somos–4 Algebraic Generating Function",
+  "label": 0,
+  "score": 0.7
+ },
+ {
+  "i": 17,
+  "title": "Trust the Critic More",
+  "label": 1,
+  "score": 0.369
+ },
+ {
+  "i": 18,
+  "title": "Embedding Prediction Helps Image Generation",
+  "label": 0,
+  "score": 0.867
+ },
+ {
+  "i": 19,
+  "title": "JEPA-TTT: Persistent Test-Time Training of Latent World Models for Planning under Dynamics Shifts",
+  "label": 0,
+  "score": 0.647
+ },
+ {
+  "i": 20,
+  "title": "DITTO-X: Forward and Reverse Teleoperation for Dexterous Manipulation and Human Intervention",
+  "label": 0,
+  "score": 0.062
+ },
+ {
+  "i": 21,
+  "title": "Leading gravitational dressing of operators and states in de Sitter space",
+  "label": 0,
+  "score": 0.565
+ },
+ {
+  "i": 22,
+  "title": "Video-Index: A Curated Meta-Benchmark for Video Understanding",
+  "label": 0,
+  "score": 0.667
+ },
+ {
+  "i": 23,
+  "title": "Physis-Lang: Self-Evolving Language as a Physical Representation for Video World Model",
+  "label": 0,
+  "score": 0.774
+ },
+ {
+  "i": 24,
+  "title": "From Knowledge Access to Source Learning: Developing Source-Specific Competence",
+  "label": 0,
+  "score": 0.536
+ },
+ {
+  "i": 25,
+  "title": "GroundingPI: A Grounding Foundation Model towards Physical Intelligence with Visual Primitives",
+  "label": 0,
+  "score": 0.727
+ },
+ {
+  "i": 26,
+  "title": "Direct Back EMF Detection Method for Sensorless Brushless DC (BLDC) Motor Drives",
+  "label": 0,
+  "score": 0.675
+ },
+ {
+  "i": 27,
+  "title": "OSWorld-Science: A Benchmark of Computer Use Agents for Learning and Using Scientific Software",
+  "label": 1,
+  "score": 0.721
+ },
+ {
+  "i": 28,
+  "title": "Beyond Memory: Harnessing Long-Horizon Agents with Explicit Belief States",
+  "label": 1,
+  "score": 0.676
+ },
+ {
+  "i": 29,
+  "title": "Selective suppression of electronic orders via interlayer coupling in superconducting bilayer nickelate thin films",
+  "label": 0,
+  "score": 0.375
+ },
+ {
+  "i": 30,
+  "title": "Multimodal Flow: Unified Flow Modeling of Language and Vision in Embedding Spaces",
+  "label": 0,
+  "score": 0.666
+ },
+ {
+  "i": 31,
+  "title": "DynaHarness: A Dynamic Physical Harness for Self-Evolving Robot Agents",
+  "label": 1,
+  "score": 0.863
+ },
+ {
+  "i": 32,
+  "title": "CLoSeR: Closing the Loop for Long-Context Streaming Reconstruction",
+  "label": 0,
+  "score": 0.4
+ },
+ {
+  "i": 33,
+  "title": "Universal interpolation for deep residual self-attention networks",
+  "label": 0,
+  "score": 0.941
+ },
+ {
+  "i": 34,
+  "title": "Closing the Loop: Practical Training Recipes for Looped Language Models",
+  "label": 0,
+  "score": 0.925
+ },
+ {
+  "i": 35,
+  "title": "ECoMEM: Explicit Concept Memory for Memory-Dependent Robot Control",
+  "label": 0,
+  "score": 0.439
+ },
+ {
+  "i": 36,
+  "title": "Not All Experience Belongs in the Weights: Component Routing for Self-Improving GUI Agents",
+  "label": 1,
+  "score": 0.539
+ },
+ {
+  "i": 37,
+  "title": "Fewer Tokens, Better Action: GPT-6 Astra Robot Agents with 14% Higher Success Rate but 65% Fewer Tokens",
+  "label": 1,
+  "score": 0.067
+ },
+ {
+  "i": 38,
+  "title": "CtrlWAM: Controllable World Action Models with Aligned Intent and Foresight",
+  "label": 0,
+  "score": 0.446
+ },
+ {
+  "i": 39,
+  "title": "When does distillation help reinforcement learning? | Base Labs",
+  "label": 1,
+  "score": 0.968
+ },
+ {
+  "i": 40,
+  "title": "Agents Are Systems, Not Models: Rethinking Agentic Evaluation",
+  "label": 1,
+  "score": 0.863
+ },
+ {
+  "i": 41,
+  "title": "LiteReality-Agent: An Agentic System for Interactable 3D Indoor Scene Reconstruction",
+  "label": 1,
+  "score": 0.523
+ },
+ {
+  "i": 42,
+  "title": "Generalization Dynamics of LM Pre-training",
+  "label": 0,
+  "score": 0.964
+ },
+ {
+  "i": 43,
+  "title": "On Language Drift during RLVR Post-Training",
+  "label": 1,
+  "score": 0.871
+ },
+ {
+  "i": 44,
+  "title": "GFD-OPD: Guidance-Folded On-Policy Distillation of Diffusion Models Across Scales",
+  "label": 0,
+  "score": 0.477
+ },
+ {
+  "i": 45,
+  "title": "RASteer: Retain-Aware Activation Steering for Concept Erasure in Diffusion Models",
+  "label": 0,
+  "score": 0.576
+ },
+ {
+  "i": 46,
+  "title": "pCoMole: Pareto-Constrained Molecule Editing with Discrete Flows",
+  "label": 0,
+  "score": 0.683
+ },
+ {
+  "i": 47,
+  "title": "4Director: Controlling Video World Models with Rigid 3D Geometry",
+  "label": 0,
+  "score": 0.434
+ },
+ {
+  "i": 48,
+  "title": "Alignment via Training Against Probes Without Losing Monitorability",
+  "label": 0,
+  "score": 0.61
+ },
+ {
+  "i": 49,
+  "title": "Towards a General Humanoid Loco-Manipulation Model via Egocentric Whole-Body Human Data Pretraining",
+  "label": 0,
+  "score": 0.924
+ },
+ {
+  "i": 50,
+  "title": "DMAD: Distribution Matching as Adversarial Distillation for Fast Visual Generation",
+  "label": 0,
+  "score": 0.946
+ },
+ {
+  "i": 51,
+  "title": "FutureWorlds: Learning Robotic World Models from Alternative Futures",
+  "label": 0,
+  "score": 0.712
+ },
+ {
+  "i": 52,
+  "title": "Electromagnetic drift-kinetic particle-in-cell model with energy and charge conservation for studying finite- 𝛽 β plasmas",
+  "label": 0,
+  "score": 0.508
+ },
+ {
+  "i": 53,
+  "title": "Continual Reinforcement Learning with Neuroevolution",
+  "label": 1,
+  "score": 0.99
+ },
+ {
+  "i": 54,
+  "title": "cua-speedrun: Standardized Benchmarking of the Speed of Computer-Use Agents",
+  "label": 1,
+  "score": 0.747
+ },
+ {
+  "i": 55,
+  "title": "The Missing Primitive: Diagnosing and Repairing Mathematical Reasoning in Large Language Models",
+  "label": 0,
+  "score": 0.781
+ },
+ {
+  "i": 56,
+  "title": "Memorizon: Training World Models Beyond Their Context Window",
+  "label": 0,
+  "score": 0.624
+ },
+ {
+  "i": 57,
+  "title": "Agent Error Dataset: Scaling 50,000 Error--Diagnosis Pairs for Failure Analysis and Error-Aware Post-Training",
+  "label": 1,
+  "score": 0.642
+ },
+ {
+  "i": 58,
+  "title": "AF-Muon: An AdamW-Free Muon Optimizer for Tied-Embedding Models",
+  "label": 0,
+  "score": 0.932
+ },
+ {
+  "i": 59,
+  "title": "Generative modeling of intrinsically disordered protein regions by reinforcing sparse autoencoder features",
+  "label": 0,
+  "score": 0.914
+ },
+ {
+  "i": 60,
+  "title": "Introduction to Computer Vision",
+  "label": 0,
+  "score": 0.794
+ },
+ {
+  "i": 61,
+  "title": "Robustifying Asynchronous SGD via Soft Throttling",
+  "label": 0,
+  "score": 0.393
+ },
+ {
+  "i": 62,
+  "title": "Wasserstein Gradient Flows and Forward-Only Diffusion Are Not Enough for Multimodal Sampling",
+  "label": 0,
+  "score": 0.822
+ },
+ {
+  "i": 63,
+  "title": "Schema: Discovering Unknown Environments via Agentic Program Induction",
+  "label": 1,
+  "score": 0.592
+ },
+ {
+  "i": 64,
+  "title": "Divide-and-Remember: Recursive Action-Relevant Memory for Long-Horizon VLA Policies",
+  "label": 0,
+  "score": 0.424
+ },
+ {
+  "i": 65,
+  "title": "Smoother Flow Matching via Contrastive Trajectory Repulsion",
+  "label": 0,
+  "score": 0.869
+ },
+ {
+  "i": 66,
+  "title": "Shared Weights, Selected Computations: How Looped Transformers Route What Each Loop Does",
+  "label": 0,
+  "score": 0.732
+ },
+ {
+  "i": 67,
+  "title": "Code Owns the Simulation, Jev Owns the Evaluation",
+  "label": 0,
+  "score": 0.499
+ },
+ {
+  "i": 68,
+  "title": "Debias Anything: Fairness with Diversity without Supervision in Diffusion Models",
+  "label": 0,
+  "score": 0.625
+ },
+ {
+  "i": 69,
+  "title": "CODesign: Consistency from Data to Trajectory in All-Atom Protein Binder Co-Design",
+  "label": 0,
+  "score": 0.592
+ },
+ {
+  "i": 70,
+  "title": "Triadic Linear Attention: Three-Dimensional Recurrent States for Long-Context Sequence Modeling",
+  "label": 0,
+  "score": 0.858
+ },
+ {
+  "i": 71,
+  "title": "Mid-Harness: Scaling Actions Between Model and Harness for Terminal Agents",
+  "label": 1,
+  "score": 0.888
+ },
+ {
+  "i": 72,
+  "title": "Causal Memory Policy: Making Memory Utility Identifiable by Intervening on Retrieval",
+  "label": 0,
+  "score": 0.39
+ },
+ {
+  "i": 73,
+  "title": "What if automating AI R&D triggers an intelligence explosion?",
+  "label": 0,
+  "score": 0.62
+ },
+ {
+  "i": 74,
+  "title": "Architectural Sampling: Test-Time Scaling via Computational Diversity in Frozen Vision-Language Models",
+  "label": 0,
+  "score": 0.518
+ },
+ {
+  "i": 75,
+  "title": "DexAgent: An Agentic Human2Sim2Robot Framework for Dexterous Manipulation with Self-Evolving Tool Library",
+  "label": 1,
+  "score": 0.501
+ },
+ {
+  "i": 76,
+  "title": "ID Balancing: Stable Training of Extremely Sparse MoE via PID-Based Load Control",
+  "label": 0,
+  "score": 0.907
+ },
+ {
+  "i": 77,
+  "title": "Invent a Dataset: Measuring dataset generation abilities with zero seed",
+  "label": 0,
+  "score": 0.373
+ },
+ {
+  "i": 78,
+  "title": "MiLoop: Selective Memory Propagation for Neural Combinatorial Optimization",
+  "label": 0,
+  "score": 0.913
+ },
+ {
+  "i": 79,
+  "title": "Discrete Forcing: Infusing Discrete Guidance into Continuous Denoising for Few-Step Action Experts",
+  "label": 0,
+  "score": 0.364
+ },
+ {
+  "i": 80,
+  "title": "Looped Transformers as Optimizers",
+  "label": 0,
+  "score": 0.875
+ },
+ {
+  "i": 81,
+  "title": "Gumbel Straight Flow: Distilling Autoregressive Models into One-step Flow Maps",
+  "label": 0,
+  "score": 0.695
+ },
+ {
+  "i": 82,
+  "title": "Flowing Faster to Coordinate: One-Step Online Multi-Agent Flow Policies",
+  "label": 1,
+  "score": 0.724
+ },
+ {
+  "i": 83,
+  "title": "Moore, Escher, Penrose: A Conformal Golden Braid",
+  "label": 0,
+  "score": 0.811
+ },
+ {
+  "i": 84,
+  "title": "Hierarchical Continuous Diffusion Language Models",
+  "label": 0,
+  "score": 0.917
+ },
+ {
+  "i": 85,
+  "title": "OmniSeek: Native Tool Integration for Multi-turn Audio-Visual Reasoning",
+  "label": 1,
+  "score": 0.709
+ },
+ {
+  "i": 86,
+  "title": "AgentWebRec: Compact Evidence Fusion over the Agent Web for Personalized Recommendation",
+  "label": 1,
+  "score": 0.477
+ },
+ {
+  "i": 87,
+  "title": "SkeleWAM: Skeleton World-Action Modeling for Efficient Robotic Manipulation",
+  "label": 0,
+  "score": 0.78
+ },
+ {
+  "i": 88,
+  "title": "Decentralized Power-Optimal Coordination for Spacecraft Swarms Using Time-Varying Magnetorquer Actuation",
+  "label": 0,
+  "score": 0.626
+ },
+ {
+  "i": 89,
+  "title": "Measuring the Stability Assumption Behind Action Chunking",
+  "label": 0,
+  "score": 0.48
+ },
+ {
+  "i": 90,
+  "title": "Programmable nonlinearity within nanophotonic waveguides",
+  "label": 0,
+  "score": 0.583
+ },
+ {
+  "i": 91,
+  "title": "Quantum real projective spaces as quantum CW-complexes via topological graphs",
+  "label": 0,
+  "score": 0.447
+ },
+ {
+  "i": 92,
+  "title": "The sixth moment of the Riemann zeta function",
+  "label": 0,
+  "score": 0.799
+ },
+ {
+  "i": 93,
+  "title": "Enhancing Autoregressive Video Generation via Representation Adversarial Distillation",
+  "label": 0,
+  "score": 0.951
+ },
+ {
+  "i": 94,
+  "title": "Is Success All You Need? Investigating the Impact of Input Perturbations on VLA Behaviour in Tabletop Manipulation Tasks",
+  "label": 0,
+  "score": 0.538
+ },
+ {
+  "i": 95,
+  "title": "An Algorithm for Generating All Berglund-Hubsch-Type Calabi-Yau Orbifolds and Their Mirrors. Classification of Maximal Admissible Groups",
+  "label": 0,
+  "score": 0.937
+ },
+ {
+  "i": 96,
+  "title": "Do Your Own Research: Learning to Forecast by Learning to Search",
+  "label": 1,
+  "score": 0.513
+ },
+ {
+  "i": 97,
+  "title": "Finding the Right Fit: Model-Harness Interactions across Agent Tasks",
+  "label": 1,
+  "score": 0.989
+ },
+ {
+  "i": 98,
+  "title": "MapLightning: Online Vectorized HD Map Construction with 1D Map Tokens",
+  "label": 0,
+  "score": 0.734
+ },
+ {
+  "i": 99,
+  "title": "What Limits Recursive Reasoning Models: Optimization, Architecture and Test-Time Scaling",
+  "label": 0,
+  "score": 0.906
+ },
+ {
+  "i": 100,
+  "title": "Rethinking Representations for World-Action Modeling",
+  "label": 0,
+  "score": 0.971
+ },
+ {
+  "i": 101,
+  "title": "Switching Linear Attention",
+  "label": 0,
+  "score": 0.703
+ },
+ {
+  "i": 102,
+  "title": "A Survey on End-to-End Autonomous Driving Training from the Perspectives of Data, Strategy, and Platform",
+  "label": 0,
+  "score": 0.746
+ },
+ {
+  "i": 103,
+  "title": "Synthetic Pre-pretraining Survives Scale, but Not as a Grammatical Prior",
+  "label": 0,
+  "score": 0.313
+ },
+ {
+  "i": 104,
+  "title": "LeapQuant: Efficient Linear Attention with Accurate Recurrent State Quantization",
+  "label": 0,
+  "score": 0.824
+ },
+ {
+  "i": 105,
+  "title": "Groundability, Not Scale Alone: When Weak Reviewers Can Audit Strong Coding Agents",
+  "label": 1,
+  "score": 0.591
+ },
+ {
+  "i": 106,
+  "title": "ActiveWAM: Evidence-Aware Active Vision for World-Action Models",
+  "label": 0,
+  "score": 0.499
+ },
+ {
+  "i": 107,
+  "title": "Compound interpretation is based on analogy",
+  "label": 0,
+  "score": 0.771
+ },
+ {
+  "i": 108,
+  "title": "LOCI: Spatial Linear Memory for Streaming World Models",
+  "label": 0,
+  "score": 0.813
+ },
+ {
+  "i": 109,
+  "title": "Escape Me If You Can: How AI Reshapes News Organisations’ Dependency on Platform Companies",
+  "label": 0,
+  "score": 0.172
+ },
+ {
+  "i": 110,
+  "title": "One Basis to Animate Them All: Gaussian Blendshape Distillation for Real-Time Avatars",
+  "label": 0,
+  "score": 0.906
+ },
+ {
+  "i": 111,
+  "title": "KaliBench: A Fine-Grained Benchmark for Cybersecurity Tool Use on Kali Linux with Runtime-Free Verifiable Rewards",
+  "label": 1,
+  "score": 0.653
+ },
+ {
+  "i": 112,
+  "title": "SILSA: Sliding-Window Slice Latents for Topology-Preserving High-Resolution 3D Generation",
+  "label": 0,
+  "score": 0.746
+ },
+ {
+  "i": 113,
+  "title": "FERPO: Forward Entropy-Regularized Policy Optimization",
+  "label": 1,
+  "score": 0.651
+ },
+ {
+  "i": 114,
+  "title": "Systematically Exploring the Capabilities of GPT-6 Astra as Embodied Policies",
+  "label": 0,
+  "score": 0.348
+ },
+ {
+  "i": 115,
+  "title": "HumanoidToolBench: Benchmarking Humanoid Tool Use from Selection to Mobile Execution",
+  "label": 0,
+  "score": 0.621
+ },
+ {
+  "i": 116,
+  "title": "Cluster structures from Legendrian double twist knots: a comparative approach",
+  "label": 0,
+  "score": 0.932
+ },
+ {
+  "i": 117,
+  "title": "WBAG: A Whole-Body and Attached-Geometry Safety Framework for Vision-Language-Action Manipulation",
+  "label": 0,
+  "score": 0.29
+ },
+ {
+  "i": 118,
+  "title": "Quasi-modularity of 𝑞 q-traces and integrals over Hilbert schemes",
+  "label": 0,
+  "score": 0.378
+ },
+ {
+  "i": 119,
+  "title": "Gravity and generalised geometry from a Lie 2-algebroid perspective",
+  "label": 0,
+  "score": 0.861
+ },
+ {
+  "i": 120,
+  "title": "Ego4WAM: What Matters When Scaling Egocentric Human Data for Robot Learning?",
+  "label": 0,
+  "score": 0.779
+ },
+ {
+  "i": 121,
+  "title": "Sparse Hamiltonian simulation with optimal dependence on the maximum column Euclidean norm",
+  "label": 0,
+  "score": 0.966
+ },
+ {
+  "i": 122,
+  "title": "Complete total-transmission modes of Kerr black holes",
+  "label": 0,
+  "score": 0.833
+ },
+ {
+  "i": 123,
+  "title": "KUAISHOU Explorer LLM-Rec Challenge 2026: Reasoning Generative Recommendation",
+  "label": 0,
+  "score": 0.645
+ },
+ {
+  "i": 124,
+  "title": "Mingbird: A Local-First Agent Harness Enabling Small Open Models to Complete Real Tasks",
+  "label": 1,
+  "score": 0.754
+ },
+ {
+  "i": 125,
+  "title": "MCRI: A Four-Dimensional Framework for Analyzing and Evaluating Agent Skills",
+  "label": 1,
+  "score": 0.885
+ },
+ {
+  "i": 126,
+  "title": "Reason in Style: Discovering and Controlling Style in Language Models",
+  "label": 0,
+  "score": 0.699
+ },
+ {
+  "i": 127,
+  "title": "VTR-Bench: A Systematic Benchmark for Evaluating Visual Text Rendering in Video Generation",
+  "label": 0,
+  "score": 0.936
+ },
+ {
+  "i": 128,
+  "title": "DRelay: Global Draft Context for Prefix-Aware Parallel Speculative Decoding Repair",
+  "label": 0,
+  "score": 0.305
+ },
+ {
+  "i": 129,
+  "title": "Detect, Explain, Interpret: An End-to-End Benchmark for Time Series Anomaly Detection, Explainability and Interpretability",
+  "label": 0,
+  "score": 0.837
+ },
+ {
+  "i": 130,
+  "title": "PhysicsLENS: Diagnosing Physical Property Blindness in Video Generation Models",
+  "label": 0,
+  "score": 0.892
+ },
+ {
+  "i": 131,
+  "title": "Continuous Process-Level Evaluation for Evolving Enterprise AI Agent Skills",
+  "label": 1,
+  "score": 0.742
+ },
+ {
+  "i": 132,
+  "title": "SplineWAM: Adaptive Action Horizons for World Action Models via B-Spline Representations",
+  "label": 0,
+  "score": 0.913
+ },
+ {
+  "i": 133,
+  "title": "Cohomology of the fine compactified universal Jacobians 𝐽 ‾ 2 J 2 ​ and 𝐽 ‾ 2 , 1 J 2,1 ​",
+  "label": 0,
+  "score": 0.712
+ },
+ {
+  "i": 134,
+  "title": "AURAL: Adaptive Latent Reasoning with Joint Chunk for Speech Language Models",
+  "label": 0,
+  "score": 0.517
+ },
+ {
+  "i": 135,
+  "title": "Compatibility of quantum instruments",
+  "label": 0,
+  "score": 0.705
+ },
+ {
+  "i": 136,
+  "title": "Multivariate Quantum Signal Processing",
+  "label": 0,
+  "score": 0.822
+ },
+ {
+  "i": 137,
+  "title": "Coverage Before Control: Route-Instruction Grounding and Steering for Controllable Retrosynthesis",
+  "label": 0,
+  "score": 0.357
+ },
+ {
+  "i": 138,
+  "title": "Communication and Sensing Coverage of UAV Corridor under Beam Misalignment Error",
+  "label": 0,
+  "score": 0.318
+ },
+ {
+  "i": 139,
+  "title": "ComputerSD: Online Self-Distillation from Real-Time Feedback for Computer-Use Agents",
+  "label": 1,
+  "score": 0.451
+ },
+ {
+  "i": 140,
+  "title": "Learning Multiple Timescales for Goal-Conditioned Reinforcement Learning",
+  "label": 1,
+  "score": 0.981
+ },
+ {
+  "i": 141,
+  "title": "Hob-VL: A Benchmark for Visually Grounded Boolean Reasoning",
+  "label": 0,
+  "score": 0.941
+ },
+ {
+  "i": 142,
+  "title": "The Heat Kernel of the Hodge Laplacian on an Invariant Subspace of 1-forms on the Hyperbolic Space 𝐻 𝑛 H n",
+  "label": 0,
+  "score": 0.422
+ },
+ {
+  "i": 143,
+  "title": "A General Theory of Multi-Resource Theories Involving Finite-Group Asymmetry",
+  "label": 0,
+  "score": 0.897
+ },
+ {
+  "i": 144,
+  "title": "Decision-Oriented Recommendation Reranking: An Empirical Study of Jev",
+  "label": 0,
+  "score": 0.952
+ },
+ {
+  "i": 145,
+  "title": "NarrativeSteward: Coordinating Delegation, Guidance, and Verification in Agent-Assisted Interactive Narrative Authoring",
+  "label": 1,
+  "score": 0.353
+ },
+ {
+  "i": 146,
+  "title": "Completion Aware Guidance for World Action Models",
+  "label": 0,
+  "score": 0.93
+ },
+ {
+  "i": 147,
+  "title": "ReSAIL: Mitigating Collapse in Iterative Agent Self-Distillation",
+  "label": 1,
+  "score": 0.931
+ },
+ {
+  "i": 148,
+  "title": "TacDyn-WAM: Learning Implicit Tactile Dynamics in a Heterogeneous Visuo-Tactile World Action Model",
+  "label": 0,
+  "score": 0.802
+ },
+ {
+  "i": 149,
+  "title": "Harness Annealing: Learning to Act with Less External Control",
+  "label": 1,
+  "score": 0.409
+ },
+ {
+  "i": 150,
+  "title": "Planetary Feature Fields are Scalable Earth Representations",
+  "label": 0,
+  "score": 0.534
+ },
+ {
+  "i": 151,
+  "title": "When Reasoning Helps Action: Monitoring and Steering Chain-of-Thought in Vision-Language-Action Policies",
+  "label": 0,
+  "score": 0.223
+ },
+ {
+  "i": 152,
+  "title": "DuoMind: Enabling Distributed Multi-Robot Coordination with Semantic Communication",
+  "label": 1,
+  "score": 0.526
+ },
+ {
+  "i": 153,
+  "title": "T 2 2 Mem: Learning Test-Time Memory for Robotics",
+  "label": 0,
+  "score": 0.798
+ },
+ {
+  "i": 154,
+  "title": "The Nash manifold of four-point configurations modulo similarity subgroups",
+  "label": 0,
+  "score": 0.957
+ },
+ {
+  "i": 155,
+  "title": "EmbodiRSI: Recursive Self-Improvement for Data-Efficient Robot Adaptation",
+  "label": 0,
+  "score": 0.927
+ },
+ {
+  "i": 156,
+  "title": "Universal Bound and Phase Transition in Many-Body Fermionic Non-Gaussianity",
+  "label": 0,
+  "score": 0.769
+ },
+ {
+  "i": 157,
+  "title": "RoPE at the End of Its Rope? Theory, Diagnosis, and Mitigation of Long-Context Failures",
+  "label": 0,
+  "score": 0.243
+ },
+ {
+  "i": 158,
+  "title": "Form and Void: Entangled Composition through an Autonomous AI Agent",
+  "label": 1,
+  "score": 0.442
+ },
+ {
+  "i": 159,
+  "title": "Task-Adaptive Grounded 3D-Programmers Using 2D VLMs",
+  "label": 0,
+  "score": 0.891
+ },
+ {
+  "i": 160,
+  "title": "Euclidean Distance Optimization Within the Grassmannian",
+  "label": 0,
+  "score": 0.939
+ },
+ {
+  "i": 161,
+  "title": "When Do Intrinsic Rewards Lead to Exploration?",
+  "label": 1,
+  "score": 0.606
+ },
+ {
+  "i": 162,
+  "title": "Continue, Abort, or Fall: Viability-Aware Policy Selection (VAPS) for Safe Humanoid Acrobatics",
+  "label": 0,
+  "score": 0.557
+ },
+ {
+  "i": 163,
+  "title": "Convergence of Kikuchi matrices to Γ Γ-independent and 𝑞 q-Gaussian limits",
+  "label": 0,
+  "score": 0.838
+ },
+ {
+  "i": 164,
+  "title": "RipplePLM: Structural and Property Decoupling for Protein Mutation Effect Generation",
+  "label": 0,
+  "score": 0.488
+ },
+ {
+  "i": 165,
+  "title": "Can AI Oversight Be Zero Knowledge?",
+  "label": 0,
+  "score": 0.052
+ },
+ {
+  "i": 166,
+  "title": "DiffWAM: A Fast and Efficient Navigation World Action Model",
+  "label": 0,
+  "score": 0.751
+ },
+ {
+  "i": 167,
+  "title": "Probe with Participation Trophies: Random-Reward RL as a Probe of LLM Capability",
+  "label": 1,
+  "score": 0.965
+ },
+ {
+  "i": 168,
+  "title": "Clock Diffusion: Efficient Semi-Autoregressive Continuous Diffusion Language Models",
+  "label": 0,
+  "score": 0.846
+ },
+ {
+  "i": 169,
+  "title": "Selection-Based Structured Reasoning: Toward Efficient Multimodal Search Agents",
+  "label": 1,
+  "score": 0.842
+ },
+ {
+  "i": 170,
+  "title": "EvenSplat: Coupled 2D-3D Decomposition for Gaussian Splatting under Exposure and Illumination Variation",
+  "label": 0,
+  "score": 0.773
+ },
+ {
+  "i": 171,
+  "title": "Coherent Release Fronts in Krylov Chains and Thermal AdS 2 2 ​ Response",
+  "label": 0,
+  "score": 0.281
+ },
+ {
+  "i": 172,
+  "title": "Abeloid varieties over higher rank valued fields: Raynaud uniformization and Néron models",
+  "label": 0,
+  "score": 0.873
+ },
+ {
+  "i": 173,
+  "title": "ChunkVLA-AM: Parallel Action Chunking for Vision-Language-Action Robot Control in Additive Manufacturing",
+  "label": 0,
+  "score": 0.619
+ },
+ {
+  "i": 174,
+  "title": "How Much Is an AI Token Worth? Scaling Laws for Wild AI-Generated Web Text",
+  "label": 0,
+  "score": 0.427
+ },
+ {
+  "i": 175,
+  "title": "GenCOPE: Syn2Real Generalized Category-Level Object Pose Estimation for Robotic Picking",
+  "label": 0,
+  "score": 0.819
+ },
+ {
+  "i": 176,
+  "title": "On the Divergence of Accuracy and Mechanism Consistency in Time Series World Models",
+  "label": 0,
+  "score": 0.882
+ },
+ {
+  "i": 177,
+  "title": "HeadEdit: Calibrating Language Model Behavior Through the Frozen Unembedding Matrix",
+  "label": 0,
+  "score": 0.702
+ },
+ {
+  "i": 178,
+  "title": "Token Communication-Assisted Collaborative Embodied Artificial Intelligence: Concepts, Framework, and Opportunities",
+  "label": 0,
+  "score": 0.497
+ }
+]

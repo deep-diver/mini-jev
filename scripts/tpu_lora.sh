@@ -22,7 +22,7 @@ TPU_NAME="${TPU_NAME:-jev-tpu}"
 ACCELERATOR="${ACCELERATOR:-v5litepod-1}"
 VERSION="${VERSION:-v2-alpha-tpuv5-lite}"
 MODEL="${MODEL:-google/gemma-3-270m-it}"
-REMOTE="${REMOTE:-\$HOME/jev}"
+REMOTE_SUBDIR="${REMOTE_SUBDIR:-jev}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Capacity is per zone and moves around; v5e-1 quota is TPU_LITE_PODSLICE_V5.
@@ -30,6 +30,16 @@ FALLBACK_ZONES="${FALLBACK_ZONES:-us-west4-a us-east1-c us-central1-a europe-wes
 
 ssh_() { gcloud compute tpus tpu-vm ssh "$TPU_NAME" --zone="$ZONE" --command="$1"; }
 scp_() { gcloud compute tpus tpu-vm scp "$1" "$TPU_NAME:$2" --zone="$ZONE" >/dev/null; }
+
+# scp does not expand ~ or $HOME in the destination, so resolve it once and
+# use absolute paths everywhere.
+remote_dir() {
+  if [ -z "${REMOTE:-}" ]; then
+    REMOTE="$(ssh_ 'echo $HOME' 2>/dev/null | tr -d "\r" | grep "^/" | tail -1)/$REMOTE_SUBDIR"
+    [ "$REMOTE" = "/$REMOTE_SUBDIR" ] && { echo "원격 홈을 찾지 못했습니다"; exit 1; }
+  fi
+  echo "$REMOTE"
+}
 
 case "${1:-}" in
 
@@ -66,6 +76,7 @@ print(\"deps OK\")"'
   ;;
 
 push)
+  REMOTE="$(remote_dir)"
   snap=$(python3 - "$MODEL" <<'PY'
 import os, sys
 from huggingface_hub import try_to_load_from_cache
@@ -93,6 +104,7 @@ PY
   ;;
 
 train)
+  REMOTE="$(remote_dir)"
   shift || true
   ssh_ "cd $REMOTE && nohup python3 train_lora_tpu.py --model $REMOTE/gemma_model \
         --data $REMOTE/data --out $REMOTE/lora.npz \
@@ -103,17 +115,20 @@ train)
   ;;
 
 log)
+  REMOTE="$(remote_dir)"
   ssh_ "pgrep -f train_lora_tpu >/dev/null && echo running || echo finished;
         grep -v 'PyTorch was not found' $REMOTE/train.log | tail -20"
   ;;
 
 eval)
+  REMOTE="$(remote_dir)"
   ssh_ "cd $REMOTE && python3 eval_lora.py --model $REMOTE/gemma_model \
         --ckpt $REMOTE/lora.npz --data $REMOTE/alphaxiv_multi.json 2>&1 \
         | grep -v 'PyTorch was not found'"
   ;;
 
 fetch)
+  REMOTE="$(remote_dir)"
   out="${2:-$ROOT/data/decision/lora_tpu.npz}"
   gcloud compute tpus tpu-vm scp "$TPU_NAME:$REMOTE/lora.npz" "$out" --zone="$ZONE"
   ls -lh "$out"

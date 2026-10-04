@@ -1,0 +1,924 @@
+@@MD
+# A Jev-style decision model on Gemma 3 270M
+
+Jev does not write text. You give it a state, declare the fields you want, and
+it returns those fields with a probability attached. There is no generation, so
+there is no parse error and no invented field.
+
+This notebook builds the same interface on a 270M model.
+
+| Approach | AUC on an unseen task |
+|---|---|
+| Reading Yes/No logits | 0.485 |
+| **LoRA + a trained head** | **0.821** |
+
+0.485 is a coin flip. What follows is why it ends up there, and what to do instead.
+
+**Contents**
+
+1. Jev-style inference — nothing is generated
+2. Measuring it properly
+3. Diagnosis — the output channel is saturated
+4. The model does know (residual stream)
+5. The pointer head
+6. Designing the training data
+7. LoRA training (JAX / TPU)
+8. Results
+
+Sections 1–4 run on CPU in about fifteen minutes. Sections 5–7 need a GPU or a
+TPU, and every number in the tables comes from an actual run.
+
+@@MD
+## 0. Setup
+
+Gemma is a gated model. Accept the licence on the
+[model page](https://huggingface.co/google/gemma-3-270m-it) first.
+
+@@CODE
+!pip -q install -U "transformers>=4.50" accelerate
+
+@@CODE
+# No login is needed if the weights are already here. A Colab secret can only
+# be read from the Colab UI -- from a CLI session the attempt raises after a
+# long timeout -- so the interactive box is the last resort rather than the
+# first thing tried.
+import os
+
+if os.environ.get("HF_HUB_OFFLINE") == "1":
+    print("offline mode")
+elif os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN"):
+    print("using the token in the environment")
+else:
+    try:
+        from google.colab import userdata
+        os.environ["HF_TOKEN"] = userdata.get("HF_TOKEN")
+        print("using the Colab secret HF_TOKEN")
+    except Exception as e:
+        print(f"no secret available ({type(e).__name__}) — logging in")
+        from huggingface_hub import notebook_login
+        notebook_login()
+
+@@CODE
+import time
+import numpy as np
+import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM
+
+MODEL = "google/gemma-3-270m-it"
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+tok = AutoTokenizer.from_pretrained(MODEL)
+if tok.pad_token is None:
+    tok.pad_token = tok.eos_token
+tok.padding_side = "right"
+model = AutoModelForCausalLM.from_pretrained(MODEL, dtype=torch.float32).to(device).eval()
+
+print(f"{sum(p.numel() for p in model.parameters()) / 1e6:.0f}M parameters · "
+      f"{model.config.num_hidden_layers} layers · hidden {model.config.hidden_size} · "
+      f"vocab {model.config.vocab_size:,} · {device}")
+
+@@MD
+Keep `vocab 262,144` in mind. It comes back in section 4.
+
+---
+## 1. Jev-style inference — nothing is generated
+
+The usual way to use an LLM looks like this.
+
+```
+prompt → forward → sample → token → forward → sample → ... → string → parse
+```
+
+A forward pass per token, then a regex over whatever came out. It is slow,
+non-deterministic, and the parsing breaks.
+
+**Jev-style inference narrows the answer in advance.** Ask for "Yes or No only"
+and the answer is already in the probability distribution at the position where
+the first answer token would go. Pull out the logits of the `Yes` and `No`
+tokens at that position and compare them. That is the whole thing.
+
+```
+prompt → one forward pass → compare candidate-token logits → done
+```
+
+- **one** forward pass, no decoding loop
+- the output is always one of the candidates, so parsing cannot fail
+- no sampling, so it is **fully deterministic**
+- a confidence falls out for free
+
+@@CODE
+def build_prompt(user_content):
+    # Gemma's chat template, with the assistant turn opened but left empty.
+    return tok.apply_chat_template(
+        [{"role": "user", "content": user_content}],
+        tokenize=False, add_generation_prompt=True,
+    )
+
+# Both casings are candidates: whichever the model reaches for, we catch it.
+YES = [tok.encode(s, add_special_tokens=False)[0] for s in ("Yes", "yes")]
+NO  = [tok.encode(s, add_special_tokens=False)[0] for s in ("No", "no")]
+print("Yes token ids:", YES, " No token ids:", NO)
+
+
+@torch.no_grad()
+def p_yes(content):
+    """One forward pass; P(Yes) read straight off the logits."""
+    enc = tok(build_prompt(content), return_tensors="pt",
+              add_special_tokens=False).to(device)   # the template adds BOS already
+    logits = model(**enc).logits[0, -1].float()
+    pair = torch.stack([logits[YES].max(), logits[NO].max()])
+    return float(torch.softmax(pair, 0)[0])
+
+
+def noul(question, context=""):
+    return p_yes(f"State / Context:\n{context}\n\n"
+                 f"Question:\n{question}\n\n"
+                 f"Answer with Yes or No only.")
+
+
+for q in ["Is Paris the capital of France?",
+          "Is Paris the capital of Germany?",
+          "Is 7 greater than 3?",
+          "Is 3 greater than 7?"]:
+    print(f"{noul(q):.3f}   {q}")
+
+@@MD
+### Wait...
+
+True and false both come back at **0.98**. The model is not reading the question
+and choosing — it is pressing Yes.
+
+Park that for a moment and look at the other primitives. **Changing only the
+candidate token set** reads things that are not Yes/No: letters `A`/`B`/`C` for a
+choice, digits `1`–`5` for a rating. For the rating, taking the **expected value**
+instead of the argmax gives a continuous number.
+
+@@CODE
+@torch.no_grad()
+def choice(question, options, context=""):
+    """Read the logits of the option letters. Still one forward pass."""
+    listed = "\n".join(f"{chr(65 + i)}. {o}" for i, o in enumerate(options))
+    enc = tok(build_prompt(f"State / Context:\n{context}\n\nQuestion:\n{question}\n\n"
+                           f"Options:\n{listed}\n\nAnswer with the letter only."),
+              return_tensors="pt", add_special_tokens=False).to(device)
+    logits = model(**enc).logits[0, -1].float()
+    ids = [tok.encode(chr(65 + i), add_special_tokens=False)[0] for i in range(len(options))]
+    p = torch.softmax(logits[ids], 0)
+    return options[int(p.argmax())], [round(float(x), 3) for x in p]
+
+
+@torch.no_grad()
+def score(question, context="", lo=1, hi=5):
+    """Expected value over the digit tokens: a continuous number, no generation."""
+    enc = tok(build_prompt(f"State / Context:\n{context}\n\nQuestion:\n{question}\n\n"
+                           f"Answer with a single number from {lo} to {hi}."),
+              return_tensors="pt", add_special_tokens=False).to(device)
+    logits = model(**enc).logits[0, -1].float()
+    ids = [tok.encode(str(n), add_special_tokens=False)[0] for n in range(lo, hi + 1)]
+    p = torch.softmax(logits[ids], 0)
+    return float(sum(n * float(q) for n, q in zip(range(lo, hi + 1), p)))
+
+
+print(choice("What kind of element is this?",
+             ["navigation", "article body", "advertisement", "footer"],
+             context='<nav class="site-menu"> Home About Products Contact </nav>'))
+print(f"{score('How urgent is this?', context='The server is on fire'):.2f}  server on fire")
+print(f"{score('How urgent is this?', context='Weekly newsletter'):.2f}  newsletter")
+
+@@MD
+`noul`, `choice` and `score` are the whole Jev interface. Each is one forward
+pass and a read of candidate-token logits.
+
+All three look wrong, though. `choice` calls a nav a footer, and `score` gives a
+server fire and a newsletter the same rating. A handful of demos settles nothing,
+so let us measure.
+
+---
+## 2. Measuring it properly
+
+Here is the real task.
+
+> **Does this element of a web page match what the user is looking for?**
+
+With one condition: **the criterion arrives at runtime.** You do not know in
+advance what someone will type, so training a "sports classifier" does not solve it.
+
+Sixteen topics, five sentences each. All of it is the kind of plain text a page
+actually contains.
+
+@@CODE
+TOPICS = {
+    "ai":      ["Nvidia unveils new Blackwell GPU architecture for AI training",
+                "How large language models are changing software engineering",
+                "OpenAI releases a smaller, faster reasoning model",
+                "Quantization brings a 70B model onto a laptop",
+                "Benchmarking int8 inference on Apple silicon"],
+    "food":    ["Why chef Ferran Adria is the subject of a new documentary",
+                "A history of sourdough baking in northern Europe",
+                "The best ramen shops in the city, ranked",
+                "How to braise short ribs without drying them out",
+                "Fermentation basics: kimchi, miso and vinegar"],
+    "sport":   ["Manchester City beat Arsenal in a late comeback",
+                "The marathon world record falls again in Berlin",
+                "How a rookie point guard changed the season",
+                "Olympic swimming trials: who qualified overnight",
+                "Cycling team announces its Tour de France roster"],
+    "finance": ["Treasury yields climb as inflation data surprises",
+                "A startup raises $40M in a round led by Sequoia",
+                "Why the central bank held rates steady this month",
+                "Quarterly earnings beat expectations on cloud revenue",
+                "Retail investors pile into a newly listed company"],
+    "nature":  ["Weeping whales: stillborn humpback whale grieving documented",
+                "T. rex teeth indicate it ran as warm as an elephant",
+                "Bear-y good neighbours: humans and animals share a town",
+                "A coral reef recovers faster than anyone predicted",
+                "Migrating birds navigate using a magnetic sense"],
+    "health":  ["Finding the cells that put our brain to sleep",
+                "A new trial for a once-weekly diabetes drug",
+                "Why sleep debt cannot simply be repaid at the weekend",
+                "Physiotherapy beats surgery for some knee injuries",
+                "Vitamin D supplements show no effect in a large study"],
+    "travel":  ["Forty-eight hours in Lisbon on a small budget",
+                "The sleeper train returning to central Europe",
+                "How to avoid the crowds at the summer festivals",
+                "A walking route along the old pilgrim path",
+                "Visa rules change for long-stay travellers"],
+    "auto":    ["Don't call it an SUV: the Ferrari Purosangue review",
+                "An electric hatchback that finally undercuts petrol",
+                "Why solid-state batteries keep slipping a year",
+                "Used car prices fall for the third quarter running",
+                "A hands-on with the new hybrid drivetrain"],
+    "music":   ["A jazz quartet reunites after thirty years apart",
+                "The album that defined a decade of British pop",
+                "Vinyl sales overtake CDs for the first time since 1987",
+                "How a bedroom producer topped the streaming chart",
+                "Orchestra announces its season of late romantics"],
+    "film":    ["A quiet drama wins the top prize at the festival",
+                "The sequel nobody asked for is surprisingly good",
+                "How practical effects made a comeback this year",
+                "Director discusses the ten-year road to release",
+                "Box office returns to pre-pandemic levels"],
+    "politics": ["Parliament votes down the housing amendment",
+                 "A coalition forms after three weeks of talks",
+                 "The mayor announces a transit funding plan",
+                 "Election turnout rises in rural districts",
+                 "New rules on lobbying take effect in January"],
+    "education": ["Universities rethink the lecture after a decade of decline",
+                  "A school district pilots a four-day week",
+                  "Tuition freezes extended for another year",
+                  "How apprenticeships are filling the skills gap",
+                  "Reading scores recover slowly after the pandemic"],
+    "fashion": ["Readers on their favourite second-hand fashion finds",
+                "The return of tailoring on the autumn runway",
+                "Why the sneaker resale market finally cooled",
+                "A label built entirely on deadstock fabric",
+                "Fashion week moves to a smaller venue"],
+    "gaming":  ["An indie roguelike tops the charts on launch day",
+                "The studio delays its open-world title again",
+                "Handheld consoles are having a second moment",
+                "Speedrunners break a record thought unbeatable",
+                "A remaster that respects the original's pacing"],
+    "space":   ["Rings around a tiny body have changed over the past decade",
+                "The lander touches down near the lunar south pole",
+                "A telescope spots the earliest galaxy yet",
+                "Launch cadence doubles at the coastal pad",
+                "Astronauts complete a six-hour spacewalk"],
+    # Belongs to no topic, so it is a negative for every criterion.
+    "boiler":  ["Subscribe to our newsletter for weekly updates",
+                "Terms of Use  Privacy Policy  Contact us",
+                "We process your data to deliver content or advertisements",
+                "Sign in to continue reading this article",
+                "Accept all cookies to continue browsing"],
+}
+
+CRITERIA = {
+    "ai": "This is about AI, machine learning, or computer chips.",
+    "food": "This is about cooking, restaurants, or food.",
+    "sport": "This is about sports or athletes.",
+    "finance": "This is about money, markets, or business finance.",
+    "nature": "This is about animals or the natural world.",
+    "health": "This is about health, medicine, or the human body.",
+    "travel": "This is about travel or places to visit.",
+    "auto": "This is about cars or vehicles.",
+    "music": "This is about music or musicians.",
+    "film": "This is about films or cinema.",
+    "politics": "This is about politics or government.",
+    "education": "This is about schools, universities, or education.",
+    "fashion": "This is about fashion or clothing.",
+    "gaming": "This is about video games.",
+    "space": "This is about space or astronomy.",
+}
+
+ITEMS = [(topic, text) for topic, texts in TOPICS.items() for text in texts]
+print(f"{len(ITEMS)} items × {len(CRITERIA)} criteria = {len(ITEMS) * len(CRITERIA)} forward passes")
+
+@@MD
+The same forward pass yields **both the logits and the hidden states**. Section 4
+needs the latter, so collect them now.
+
+@@CODE
+def build_content(text, criterion):
+    return (f'State / Context:\nElement: <a>\nText: "{text}"\n\n'
+            f'Question:\nThe user is looking for: {criterion}\n\n'
+            f'Does this page element match what the user is looking for?\n\n'
+            f'Answer with Yes or No only.')
+
+
+@torch.no_grad()
+def forward_batch(prompts):
+    # Right padding puts the answer at a different index in every row, so read
+    # each row's last *real* token rather than -1.
+    enc = tok(prompts, return_tensors="pt", padding=True,
+              add_special_tokens=False).to(device)
+    last = enc["attention_mask"].sum(1) - 1
+    rows = torch.arange(len(prompts), device=device)
+
+    out = model(**enc, output_hidden_states=True)
+    logits = out.logits[rows, last].float()
+    pair = torch.stack([logits[:, YES].max(1).values, logits[:, NO].max(1).values], 1)
+
+    # (batch, n_layers+1, hidden): every layer, at the answer position.
+    states = torch.stack([h[rows, last] for h in out.hidden_states], 1)
+    return torch.softmax(pair, 1)[:, 0].cpu().numpy(), states.float().cpu().numpy()
+
+
+prompts, labels, crits = [], [], []
+for ckey, criterion in CRITERIA.items():
+    for topic, text in ITEMS:
+        prompts.append(build_prompt(build_content(text, criterion)))
+        labels.append(1 if topic == ckey else 0)
+        crits.append(ckey)
+
+ps, states = [], []
+t0 = time.time()
+for i in range(0, len(prompts), 16):
+    p, h = forward_batch(prompts[i:i + 16])
+    ps.append(p)
+    states.append(h)
+ps, states = np.concatenate(ps), np.concatenate(states)
+labels, crits = np.array(labels), np.array(crits)
+print(f"{len(ps)} passes in {time.time() - t0:.0f}s · states {states.shape}")
+
+@@MD
+### Choosing a metric
+
+Accuracy is useless here. Only one item in sixteen is a positive, so
+**answering No to everything scores 94%**.
+
+AUC is the probability that a randomly chosen positive outranks a randomly
+chosen negative. 0.5 is a coin, 1.0 is perfect, and a skewed positive rate does
+not fool it. It also **does not move when every score is shifted by the same
+amount**, because it only looks at the ordering.
+
+@@CODE
+def auc(scores, y):
+    npos, nneg = int((y == 1).sum()), int((y == 0).sum())
+    order = np.argsort(scores, kind="mergesort")
+    ranks = np.empty(len(scores)); ranks[order] = np.arange(1, len(scores) + 1)
+    return (ranks[y == 1].sum() - npos * (npos + 1) / 2) / (npos * nneg)
+
+
+print(f"P(Yes)  min {ps.min():.4f}  median {np.median(ps):.4f}  max {ps.max():.4f}")
+print(f"        positives {ps[labels == 1].mean():.4f}   negatives {ps[labels == 0].mean():.4f}")
+print(f"\nAUC {auc(ps, labels):.3f}")
+
+@@MD
+**0.575.** Every answer sits around 0.998. Ask "is this about space?", show it a
+braised short rib recipe, and it says Yes.
+
+Real pages behave the same. Labelling 179 alphaXiv paper titles by hand gives
+A (reinforcement learning) 0.573 · B (video) 0.588 · C (maths and physics) 0.304,
+for a **mean of 0.485**.
+
+---
+## 3. Diagnosis — the output channel is saturated
+
+"It is only 270M" teaches nothing. Eliminate the possibilities one at a time.
+
+| Suspicion | How to rule it out |
+|---|---|
+| Wrong token ids or prompt format | Let the same model simply **generate** |
+| Broken weights | Same test |
+| Comparing the wrong two tokens | Look at the **whole distribution** at that position |
+| It is the wording | **Reverse the polarity** |
+
+@@CODE
+print("[1] Are the weights and the prompt sound? Just generate.")
+for q in ["The capital of France is", "2 + 2 ="]:
+    enc = tok(build_prompt(q), return_tensors="pt", add_special_tokens=False).to(device)
+    out = model.generate(**enc, max_new_tokens=8, do_sample=False)
+    print("    ", repr(tok.decode(out[0, enc["input_ids"].shape[1]:], skip_special_tokens=True)))
+
+print("\n[2] Does reversing the polarity reverse the answer?")
+for q in ["Is Paris the capital of Germany?", "Is Paris NOT the capital of Germany?"]:
+    print(f"     P(Yes) {noul(q):.4f}   {q}")
+
+@@MD
+Generation produces `Paris.` and `4` exactly. The weights, the tokenizer and the
+prompt format are all fine. And reversing the question leaves the answer at Yes.
+
+One doubt remains. If the model actually wants to emit `"Sure"` or `"The"` and we
+are comparing two tokens it never considered, the ratio means nothing.
+**Look at the whole distribution** at that position.
+
+@@CODE
+print("[3] Are we reading the wrong logits?")
+for s in ("Yes", "No"):
+    i = tok.encode(s, add_special_tokens=False)
+    print(f"     {s!r} -> id {i}, decoded back {[tok.decode([x]) for x in i]!r}")
+
+enc = tok(build_prompt("Is Paris the capital of Germany? Answer with Yes or No only."),
+          return_tensors="pt", add_special_tokens=False).to(device)
+print(f"     {enc['input_ids'].shape[1]} prompt tokens, last 4 "
+      f"{[tok.decode([i]) for i in enc['input_ids'][0, -4:].tolist()]}")
+
+with torch.no_grad():
+    probs = torch.softmax(model(**enc).logits[0, -1].float(), 0)
+top = torch.topk(probs, 6)
+print("\n     top-6 at the answer position:")
+for i, v in zip(top.indices.tolist(), top.values.tolist()):
+    print(f"       {tok.decode([i])!r:18} {v:.4f}")
+print(f"\n     probability mass held by Yes and No: "
+      f"{float(probs[YES].max() + probs[NO].max()) * 100:.2f}%")
+
+@@MD
+**Yes and No hold 100% of the probability.** Nothing is leaking to a third token —
+the model is choosing between exactly those two, and it picks the wrong one. The
+readout is not the problem.
+
+Last, check whether it is the phrasing.
+
+@@CODE
+PAIRS = [("Paris is the capital of France.", True),
+         ("Paris is the capital of Germany.", False),
+         ("The sun rises in the east.", True),
+         ("The sun rises in the west.", False),
+         ("Fish can breathe underwater.", True),
+         ("Fish can breathe in outer space.", False)]
+
+VARIANTS = {
+    "question":   lambda s: f"Is the following statement true?\n\n{s}\n\nAnswer with Yes or No only.",
+    "fact-check": lambda s: f"Statement: {s}\n\nIs this statement factually correct? Answer Yes or No.",
+    "reversed":   lambda s: f"Statement: {s}\n\nIs this statement FALSE? Answer Yes or No.",
+    "terse":      lambda s: f"{s}\nTrue or false? Answer with Yes if true, No if false.",
+}
+
+print(f"{'phrasing':12s} {'acc':>6s} {'true':>8s} {'false':>8s} {'margin':>9s}")
+for name, shape in VARIANTS.items():
+    sc = [(p_yes(shape(s)), t) for s, t in PAIRS]
+    acc = sum((p > 0.5) == t for p, t in sc) / len(sc)
+    tp = np.mean([p for p, t in sc if t]); fp = np.mean([p for p, t in sc if not t])
+    print(f"{name:12s} {acc:6.0%} {tp:8.3f} {fp:8.3f} {tp - fp:+9.3f}")
+
+@@MD
+All four land at **50% accuracy**, with margins in the third decimal place.
+Switching output format changes nothing either: asked for JSON the model emits
+syntactically perfect output (zero parse failures) and returns
+`{"relevant": true}` for **all 179** paper titles.
+
+> **Diagnosis: the output channel is saturated.** An instruct model this size has
+> a weak habit of obeying "pick one of Yes or No", and the final matrix that
+> projects into 262,144 dimensions buries what difference there is. Changing the
+> format (JSON) or the wording does not touch it.
+
+Which leaves one question. **Does the model not know, or can it not say?**
+
+---
+## 4. The model does know (residual stream)
+
+Each transformer layer adds to a vector called the residual stream. At the end,
+the LM head projects that vector into the 262,144-dimensional vocabulary to make
+next-token probabilities.
+
+Everything so far has been **after** that projection. What does it look like
+**before**?
+
+The tool is a **linear probe** — one dot product from the hidden vector to a
+single score. It has `hidden_size + 1 = 641` parameters and a closed-form
+solution that takes a second. It answers exactly one question: is this
+information present in a linearly separable form?
+
+### Evaluation design
+
+The criterion is **typed by the user at runtime**. So the only number that means
+anything is performance on a criterion the probe has **never seen**. Fitting on
+"space" and scoring on "space" measures whether it memorised a space classifier,
+which is not what we want to know.
+
+**Leave-one-criterion-out**: fit on fourteen, score the fifteenth, repeat.
+
+@@CODE
+def fit(X, y, ridge):
+    """Ridge least squares onto +-1 targets. Closed form, no gradients.
+
+    The bias column is deliberately left out of the penalty: shrinking it would
+    only drag every score toward zero.
+    """
+    A = np.c_[X, np.ones(len(X))]
+    R = ridge * np.eye(A.shape[1]); R[-1, -1] = 0.0
+    return np.linalg.solve(A.T @ A + R, A.T @ (y * 2.0 - 1.0))
+
+
+def loco_auc(H, y, groups, ridge=100.0):
+    mu = H.mean(0)
+    X = (H - mu) / ((H - mu).std(0) + 1e-6)
+    out = np.zeros(len(y))
+    for g in np.unique(groups):
+        te = groups == g
+        w = fit(X[~te], y[~te], ridge)
+        out[te] = np.c_[X[te], np.ones(te.sum())] @ w
+    return float(np.mean([auc(out[groups == g], y[groups == g])
+                          for g in np.unique(groups)]))
+
+
+n_layers = states.shape[1]
+layer_auc = [loco_auc(states[:, L].astype(np.float64), labels, crits)
+             for L in range(n_layers)]
+best = int(np.argmax(layer_auc))
+for L in range(n_layers):
+    print(f"  layer {L:2d}   AUC {layer_auc[L]:.3f}" + ("  <--" if L == best else ""))
+print(f"\nthe Yes/No readout scores {auc(ps, labels):.3f}")
+
+@@CODE
+import matplotlib.pyplot as plt
+
+PROBE, MUTED, INK, GRID = "#3b6fd4", "#9a9a94", "#2b2b28", "#e8e8e4"
+
+fig, ax = plt.subplots(figsize=(8, 4.2), dpi=130)
+ax.plot(range(n_layers), layer_auc, color=PROBE, lw=2, marker="o", ms=4.5,
+        markeredgecolor="white", markeredgewidth=1.0, zorder=3)
+base = auc(ps, labels)
+ax.axhline(base, color=MUTED, lw=1.4, ls=(0, (4, 3)), zorder=2)
+ax.annotate(f"Yes/No logit readout   {base:.3f}", xy=(7.6, base - 0.085),
+            color=MUTED, fontsize=9)
+ax.scatter([best], [layer_auc[best]], s=110, facecolor="none",
+           edgecolor=PROBE, lw=1.6, zorder=4)
+ax.annotate(f"layer {best}  ·  {layer_auc[best]:.3f}",
+            xy=(best + 0.55, layer_auc[best] - 0.13),
+            color=PROBE, fontsize=10, fontweight="bold")
+ax.set_title("Linear probe on the residual stream, by layer (leave-one-criterion-out)",
+             fontsize=11, color=INK, pad=12, loc="left")
+ax.set_xlabel("residual stream layer", fontsize=9, color=MUTED)
+ax.set_ylabel("AUC", fontsize=9, color=MUTED)
+ax.set_ylim(0.0, 1.05); ax.set_xlim(-0.6, n_layers - 0.4)
+ax.set_xticks(range(0, n_layers, 2))
+ax.grid(axis="y", color=GRID, lw=0.8); ax.set_axisbelow(True)
+for s in ("top", "right"): ax.spines[s].set_visible(False)
+for s in ("left", "bottom"): ax.spines[s].set_color(GRID)
+ax.tick_params(colors=MUTED, labelsize=9)
+plt.tight_layout(); plt.show()
+
+@@MD
+**The model knew.** What scores 0.575 through the output channel scores around
+0.97 in the middle layers.
+
+The shape is worth reading. Early layers are still close to surface token
+identity, so they are weak; meaning settles around the fifth layer and the curve
+jumps; the middle is the peak. Later layers rearrange toward "what token comes
+next", which blurs the axis we want, and the LM head on the end finishes the job.
+
+> **Why is layer 1 at 0.045 rather than 0.5?** Below 0.5 does not mean "no
+> information", it means **the direction is flipped**. A direction fitted on
+> fourteen criteria points the wrong way on the fifteenth. It fails to
+> generalise; it is not free signal you could use upside down.
+
+That is the diagnosis. **The information is in the model and only the output
+channel is blocked.** So the job is clear: **train a separate readout.**
+
+---
+## 5. The pointer head
+
+A linear probe answers one **fixed** question. We need an interface whose options
+change from call to call.
+
+A **pointer head** does that. Each option gets a marker inside the same sequence;
+the hidden state at `Decision:` is the **query**, the hidden state at each marker
+is a **key**, and the logits are their dot products.
+
+```
+State:
+<text>
+
+Question: <instructions>
+Options:
+first option <0>      <- key
+second option <1>     <- key
+Decision:             <- query
+```
+
+`logit_i = <W_q h_decision, W_k h_option_i> / sqrt(d)`
+
+The weights act on the option's *representation* rather than its *identity*, so
+the candidate set need not be fixed. It takes whatever arrives at runtime and
+handles `noul`, `choice` and `score` with one structure. (The design follows
+[kev](https://github.com/jaredpalmer/kev).)
+
+**The marker has to trail its option.** Attention is causal, so a marker placed
+in front summarises everything except the option it stands for.
+
+@@CODE
+import torch.nn as nn
+
+def render(state, instructions, options):
+    lines = [f"State:\n{state}\n", f"Question: {instructions}", "Options:"]
+    for i, o in enumerate(options):
+        lines.append(f"{o} <{i}>")      # marker after the option
+    lines.append("Decision:")
+    return "\n".join(lines)
+
+
+class PointerHead(nn.Module):
+    def __init__(self, hidden, dim=256):
+        super().__init__()
+        self.q = nn.Linear(hidden, dim, bias=False)
+        self.k = nn.Linear(hidden, dim, bias=False)
+        self.norm = nn.LayerNorm(hidden)
+        self.dim = dim
+
+    def forward(self, states, mask):
+        # states: (B, 1 + n_options, hidden) -- index 0 is the query, rest are keys
+        x = self.norm(states)
+        q = self.q(x[:, 0])
+        k = self.k(x[:, 1:])
+        logits = (k @ q.unsqueeze(-1)).squeeze(-1) / self.dim ** 0.5
+        return logits.masked_fill(~mask, -1e4)
+
+
+print(render("Shoes arrived late and in the wrong size.",
+             "Which team should handle this?",
+             ["Returns and refunds", "Shipping", "Billing"]))
+print(f"\nhead parameters: {sum(p.numel() for p in PointerHead(640).parameters()):,}")
+
+@@MD
+> **Temperature fitting** is the finishing step every Jev implementation does.
+> Raw confidence runs systematically high, so one scalar is fitted on held-out
+> labels and the logits are divided by it. The ranking (AUC) does not move;
+> the **calibration (ECE)** does. For anything that cuts on a threshold, that
+> matters as much as the accuracy.
+
+---
+## 6. Designing the training data
+
+This decides the outcome more than anything else, and it reduces to one rule.
+
+> **A negative is drawn from the same corpus as its positive, from a different class.**
+
+Then the model cannot win by noticing what *kind* of text this is; it has to
+judge the topic. Fill the negatives with boilerplate — cookie banners, terms of
+use — and the model learns "has content" rather than "is on topic". That axis
+scores well in training and is perfectly flat on a page where every item is a
+paper title.
+
+Nine public corpora (ag_news, dbpedia, yahoo, 20newsgroups, clinc, banking77,
+emotion, sst5, yelp), 292 classes, **43,629 requests**. Paper and abstract
+corpora are **deliberately excluded**: the evaluation is alphaXiv paper titles,
+and it is only worth anything while it stays out of domain.
+
+| Type | Count | Shape |
+|---|---|---|
+| noul | 28,602 | a criterion in natural language + Yes/No |
+| choice | 14,428 | that corpus's own labels |
+| score | 599 | labels with an order |
+
+The criterion sentence is varied over six templates so the head learns the task
+rather than one sentence.
+
+@@CODE
+# The core of it. Full version in scripts/build_decision_data.py
+import random
+
+CRITERION_TEMPLATES = ["This is about {}.", "The user is looking for: {}",
+                       "Is this relevant to someone interested in {}?",
+                       "I want to see things about {}.",
+                       "Show me content about {}.", "{}"]
+
+
+def make_noul(rng, text, cls, classes, pos_rate=0.35):
+    match = rng.random() < pos_rate
+    # The one line that matters: a negative is a different class of the same corpus.
+    topic = cls if match else rng.choice([c for c in classes if c != cls])
+    crit = rng.choice(CRITERION_TEMPLATES).format(topic)
+    return {"state": text,
+            "instructions": f"{crit}\n\nDoes this match what the user is looking for?",
+            "options": ["Yes", "No"], "gold": 0 if match else 1}
+
+
+rng = random.Random(0)
+classes = ["space", "sports", "cooking", "finance"]
+for _ in range(3):
+    d = make_noul(rng, "The lander touches down near the lunar south pole.", "space", classes)
+    print(f"{d['instructions'].splitlines()[0]:58s} -> {d['options'][d['gold']]}")
+
+@@MD
+---
+## 7. LoRA training (JAX / TPU)
+
+Training the head alone only reads the representation the backbone **already**
+provides. Moving the representation itself means touching the backbone, and a
+full fine-tune rewrites all 268M parameters. **LoRA** instead puts two low-rank
+matrices beside each weight and trains only their product.
+
+```
+W x  →  W x + (B A) x        A: (r, in),  B: (out, r),  r = 16
+```
+
+Initialising `B` to zero makes it an exact identity at the start, so training
+begins from the original model. Applied to the four attention projections
+(q/k/v/o) the trainable count is **LoRA 1,474,560 + head 328,960 = 1,803,520,
+or 0.67% of the model**.
+
+@@CODE
+# The core of it. Full version in scripts/train_lora_tpu.py
+SNIPPET = '''
+def dense(x, W, a, b, scale):
+    return jnp.dot(x, W.T) + scale * jnp.dot(jnp.dot(x, a.T), b.T)   # W stays frozen
+
+# The layers are folded with scan. Unrolling all 18 in Python makes an HLO large
+# enough that compilation exhausts host memory. scan compiles one layer body,
+# and @jax.checkpoint recomputes activations to cut memory further.
+@jax.checkpoint
+def layer(x, p):
+    w, lo, full = p
+    q = dense(h, w["self_attn.q_proj.weight"], lo["q_A"], lo["q_B"], scale)
+    ...
+    return x, None
+
+x, _ = jax.lax.scan(layer, x, (stacked, lora, is_full))
+return rms_norm(x, final_norm)
+'''
+print(SNIPPET)
+
+@@MD
+### Always check a forward pass you wrote yourself
+
+Rewriting a model in JAX goes wrong quietly. Comparing against HuggingFace with
+LoRA disabled (`B = 0`, so it is an identity) is the only reliable check. One
+trap: HF applies the final norm **only to the last entry** of `hidden_states`.
+Match that and the two agree to **cosine 1.000000, max difference 2e-4**.
+
+### Running it — get the repository
+
+The commands below use scripts and data from the repository, so fetch it first.
+
+@@CODE
+!git clone -q https://github.com/deep-diver/mini-jev.git 2>/dev/null || true
+%cd mini-jev
+!ls scripts/ | head -8
+
+@@CODE
+# The training set is built from public datasets on the spot (~2 min, 43,629 requests).
+!python3 scripts/build_decision_data.py
+
+@@MD
+With a GPU you can train right here.
+
+```bash
+python3 scripts/train_lora_tpu.py --model google/gemma-3-270m-it \
+    --data data/decision --out lora.npz \
+    --steps 2000 --batch 32 --max-len 256 --rank 16 --dim 256
+python3 scripts/eval_lora.py --ckpt lora.npz --data data/eval/alphaxiv_multi.json
+```
+
+### Running it — TPU
+
+The TPU is a VM **in your own GCP project**, not a Colab runtime. It bills by
+the hour, so shut it down when you are finished.
+
+**1) gcloud, once.**
+
+```bash
+gcloud auth login
+gcloud config set project <PROJECT_ID>
+```
+
+Check the v5e quota. The entry to look for is `TPU_LITE_PODSLICE_V5`.
+
+```bash
+gcloud compute regions describe us-west4 --format=json \
+  | python3 -c "import json,sys; [print(q) for q in json.load(sys.stdin)['quotas'] if 'TPU' in q['metric']]"
+```
+
+**2) From creation to cleanup.** `scripts/tpu_lora.sh` handles one step per command.
+
+```bash
+scripts/tpu_lora.sh create     # create a v5litepod-1     ~2 min
+scripts/tpu_lora.sh setup      # install jax[tpu] etc.    ~1 min
+scripts/tpu_lora.sh push       # weights, data, scripts   ~2 min
+scripts/tpu_lora.sh train      # starts in the background
+scripts/tpu_lora.sh log        # progress
+scripts/tpu_lora.sh eval
+scripts/tpu_lora.sh fetch      # checkpoint back to the local repo
+scripts/tpu_lora.sh stop       # billing stops, disk is kept
+scripts/tpu_lora.sh delete     # nothing is kept
+```
+
+About ten minutes end to end for 2000 steps.
+
+### What the script actually does
+
+A link you cannot read teaches nothing, so here are the three parts worth
+understanding.
+
+**Creation** — v5e-1 capacity differs by zone and moves around. When one zone
+answers "no more capacity", try the next.
+
+```bash
+for z in us-west4-a us-east1-c us-central1-a europe-west4-a; do
+  gcloud compute tpus tpu-vm create "$TPU_NAME" --zone="$z" \
+    --accelerator-type=v5litepod-1 --version=v2-alpha-tpuv5-lite && break
+done
+```
+
+**Installation** — only the tokenizer is needed, so `transformers` goes in with
+`--no-deps` and torch never lands on the machine. The cost is that optax's own
+requirements have to be added by hand.
+
+```bash
+pip install "jax[tpu]" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
+pip install optax safetensors "transformers>=4.44" --no-deps
+pip install tokenizers huggingface_hub regex filelock pyyaml tqdm packaging requests
+pip install absl-py chex etils toolz        # without these optax dies on import
+```
+
+**Shipping the weights** — Gemma is gated, so downloading it on the VM needs a
+token. Pushing from the local Hugging Face cache avoids that entirely. The
+snapshot is a directory of symlinks into `blobs`, so `cp -L` is what copies the
+real files.
+
+```bash
+snap=$(python3 -c "from huggingface_hub import try_to_load_from_cache as f; import os;
+                   print(os.path.dirname(f('google/gemma-3-270m-it','config.json')))")
+cp -L "$snap"/* /tmp/jev_model/ && tar -czf /tmp/jev_model.tgz -C /tmp/jev_model .
+gcloud compute tpus tpu-vm scp /tmp/jev_model.tgz "$TPU_NAME:$REMOTE/" --zone="$ZONE"
+```
+
+> `scp` does not expand `~` or `$HOME` in the destination. Ask the VM for its
+> home over `ssh` once and use absolute paths.
+
+### Speed
+
+| Hardware | s/step | 2000 steps |
+|---|---|---|
+| TPU v5e-1 (batch 32) | 0.074 | 3 min |
+| T4 (batch 16) | 0.95 | 32 min |
+
+Being JAX, the same code runs on both.
+
+---
+## 8. Results
+
+To see whether LoRA actually contributes, **hold everything else fixed**: same
+data, same 2000 steps, same batch of 32, same head. Only the adapter changes.
+
+| | In-domain dev | **AUC on an unseen task** |
+|---|---|---|
+| head only | 0.695 | 0.475 |
+| **LoRA + head** | **0.877** | **0.821** |
+
+Every criterion improves: A 0.669→0.729, B 0.556→0.858, C 0.198→0.877.
+
+On the unseen task — 179 alphaXiv paper titles × 3 criteria, a domain absent
+from training — that is **0.485 → 0.821**.
+
+### Longer is not better
+
+| Steps | In-domain dev | AUC on an unseen task |
+|---|---|---|
+| 2000 | 0.877 | **0.821** |
+| 6000 | 0.887 | 0.724 |
+
+In-domain rises while transfer falls. Which means **selecting a checkpoint on
+in-domain dev picks the one that transfers worst.** Select on a held-out **task**.
+
+@@MD
+---
+## Takeaways
+
+1. **Do not ask a small model to follow instructions.** The `Yes`/`No` logits are
+   saturated, and switching to JSON returns `true` for all 179 items. It is not
+   a formatting problem.
+2. **A blocked output does not mean the model does not know.** Look at the
+   residual stream before the LM head; a 641-parameter probe settles it.
+3. **So train the readout.** A pointer head tolerates changing options, which is
+   what lets `noul`, `choice` and `score` share one structure.
+4. **The negatives in your training data decide the result.** They have to be the
+   same kind of text about a different subject.
+5. **Hold out the runtime input** — and select the model on it too.
+6. **Training longer does not make it better.**
+
+### Exercises
+
+1. Vary `best` and watch how end-to-end performance moves.
+2. Compare LOCO AUC at `ridge` of 1 / 100 / 10000. Why does it want a large value?
+3. Would a small MLP beat the linear probe? (Hint: the criterion is held out.)
+4. Break the rule in section 6 — refit with boilerplate-only negatives and see
+   what the number does.
+5. Implement `permutations=2`, averaging the two option orders, and measure ECE.
+
+### Code
+
+[build_decision_data.py](https://github.com/deep-diver/mini-jev/blob/main/scripts/build_decision_data.py) ·
+[pointer_head.py](https://github.com/deep-diver/mini-jev/blob/main/scripts/pointer_head.py) ·
+[train_lora_tpu.py](https://github.com/deep-diver/mini-jev/blob/main/scripts/train_lora_tpu.py) ·
+[eval_lora.py](https://github.com/deep-diver/mini-jev/blob/main/scripts/eval_lora.py) ·
+[tpu_lora.sh](https://github.com/deep-diver/mini-jev/blob/main/scripts/tpu_lora.sh)

@@ -85,21 +85,21 @@ def main():
         recs = [{"state": t, "instructions": "Which describes this title?",
                  "options": [c["text"], "Something else"], "gold": 0}
                 for t in titles]
-        for name, lora in (("LoRA 끔 (헤드만)", zero), ("LoRA 켬", params["lora"])):
+        for name, lora in (("adapter off (head only)", zero), ("adapter on", params["lora"])):
             s, kept = score(recs, lora)
             assert len(kept) == len(titles), f"{len(kept)} of {len(titles)} kept"
             rows.setdefault(name, {})[key] = auc(s, y)
 
-    print(f"\n{'설정':22s} " + "".join(f"{k:>8s}" for k in data["criteria"])
-          + f"{'평균':>8s}")
+    print(f"\n{'setting':24s} " + "".join(f"{k:>8s}" for k in data["criteria"])
+          + f"{'mean':>8s}")
     print("-" * 56)
     for name, per in rows.items():
         v = [per[k] for k in data["criteria"]]
         print(f"{name:22s} " + "".join(f"{x:8.3f}" for x in v) + f"{np.mean(v):8.3f}")
     print("-" * 56)
-    print("비교 (같은 179편, 같은 라벨):")
-    print("   zero-shot Yes/No 로짓                     평균 0.485")
-    print("   동결 백본 + 포인터 헤드 (학습 9k)             평균 0.704")
+    print("for comparison, same 179 titles and labels:")
+    print("   zero-shot Yes/No logits                 mean 0.485")
+    print("   frozen backbone + pointer head (9k)     mean 0.704")
     return 0
 
 

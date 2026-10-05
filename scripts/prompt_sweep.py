@@ -90,22 +90,22 @@ def main():
 
     # name -> (prompt builder, positive ids, negative ids, invert)
     VARIANTS = {
-        "0 현재 배포본 (State/Context)": (
+        "0  as shipped (State/Context)": (
             lambda t: chat(f'State / Context:\nElement: <a>\nText: "{t}"\n\n'
                            f'Question:\nThe user is looking for: {CRIT}\n\n'
                            f'Does this page element match what the user is looking for?\n\n'
                            f'Answer with Yes or No only.'), YES, NO, False),
-        "1 최소형": (
+        "1  minimal": (
             lambda t: chat(f'Title: {t}\nTopic: {CRIT}\nMatch? Answer Yes or No.'),
             YES, NO, False),
-        "2 분류 지시": (
+        "2  classify instruction": (
             lambda t: chat(f'Classify this paper title.\n\nTitle: "{t}"\n\n'
                            f'Is it about reinforcement learning, agents, or training '
                            f'with rewards?\nAnswer with Yes or No only.'), YES, NO, False),
-        "3 직설 (기준문 제거)": (
+        "3  direct, no criterion sentence": (
             lambda t: chat(f'"{t}"\n\nDoes this paper use reinforcement learning or '
                            f'build an autonomous agent? Yes or No.'), YES, NO, False),
-        "4 극성 반전 (무관한가?)": (
+        "4  reversed polarity (unrelated?)": (
             lambda t: chat(f'Title: "{t}"\n\nThe user is looking for: {CRIT}\n\n'
                            f'Is this title UNRELATED to what the user wants? Yes or No.'),
             YES, NO, True),
@@ -121,30 +121,30 @@ def main():
                            "".join(f'Title: "{s}"\nAnswer: {l}\n\n'
                                    for s, l in shots(3, "Yes", "No")) +
                            f'Title: "{t}"\nAnswer:'), YES, NO, False),
-        "7 6-shot + 접두사 강제": (
+        "7  6-shot + forced prefix": (
             lambda t: chat("Label each paper title Yes or No.\nQuestion: is it about "
                            f"{CRIT}\n\n" +
                            "".join(f'Title: "{s}"\nAnswer: {l}\n\n'
                                    for s, l in shots(3, "Yes", "No")) +
                            f'Title: "{t}"', prefix="\nAnswer:"), YES, NO, False),
-        "8 완성형 (챗 템플릿 없음)": (
+        "8  completion, no chat template": (
             lambda t: (f'Question: is this paper about {CRIT}\n\n'
                        f'Title: "{SHOT_POS[0]}"\nAnswer: Yes\n\n'
                        f'Title: "{SHOT_NEG[0]}"\nAnswer: No\n\n'
                        f'Title: "{t}"\nAnswer:'), YES, NO, False),
-        "9 A/B 선택": (
+        "9  A/B choice": (
             lambda t: chat(f'Title: "{t}"\n\nWhich describes it?\n'
                            f'A. It is about {CRIT}\nB. It is about something else.\n\n'
                            f'Answer with the letter only.'), A, B, False),
-        "10 A/B 순서 뒤집음": (
+        "10 A/B order reversed": (
             lambda t: chat(f'Title: "{t}"\n\nWhich describes it?\n'
                            f'A. It is about something else.\nB. It is about {CRIT}\n\n'
                            f'Answer with the letter only.'), A, B, True),
-        "11 JSON 접두사": (
+        "11 JSON prefix": (
             lambda t: chat(f'Paper title: "{t}"\n\nThe user is looking for: {CRIT}\n\n'
                            f'Reply with JSON only.', prefix='{"relevant": '),
             TRUE, FALSE, False),
-        "12 1/0 비트": (
+        "12 1/0 bit": (
             lambda t: chat(f'Title: "{t}"\nTopic: {CRIT}\n\n'
                            f'Output 1 if it matches, 0 if not. Output the digit only.'),
             ONE, ZERO, False),
@@ -152,14 +152,14 @@ def main():
         # The three changes below are what actually move the number, and each
         # one removes a piece of "instruction following" rather than improving
         # it. See the ablation printed at the end.
-        "13 패턴완성 RL/other + 지시문": (
+        "13 pattern completion RL/other + instruction": (
             lambda t: ("Label each paper title with RL or other.\n\n"
                        + label_block(2, "RL", "other") + f'Title: "{t}"\nLabel:'),
             ids("RL"), ids("other"), False),
-        "14 패턴완성 RL/other, 지시문 없음": (
+        "14 pattern completion RL/other, no instruction": (
             lambda t: label_block(2, "RL", "other") + f'Title: "{t}"\nLabel:',
             ids("RL"), ids("other"), False),
-        "15 (14) + 챗 템플릿 되돌림": (
+        "15 (14) with the chat template back": (
             lambda t: chat("Label each paper title with RL or other.\n\n"
                            + label_block(2, "RL", "other") + f'Title: "{t}"',
                            prefix="\nLabel:"),
@@ -184,20 +184,20 @@ def main():
             out += torch.softmax(torch.stack([a, b], 1), 1)[:, 0].tolist()
         return [1.0 - s for s in out] if invert else out
 
-    print(f"{len(titles)}편 · 양성 {int(y.sum())} ({y.mean():.0%}) · {MODEL} · {device}\n")
-    print(f"{'프롬프트 변형':30s} {'AUC':>6s} {'평균점수':>8s} {'표준편차':>8s}")
+    print(f"{len(titles)} titles · {int(y.sum())} positive ({y.mean():.0%}) · {MODEL} · {device}\n")
+    print(f"{'prompt variant':44s} {'AUC':>6s} {'mean':>8s} {'sd':>8s}")
     print("-" * 56)
     rows = []
     for name, (build, pos, neg, inv) in VARIANTS.items():
         s = score(build, pos, neg, inv)
         a = auc(s, y)
         rows.append((a, name, float(np.mean(s)), float(np.std(s))))
-        print(f"{name:30s} {a:6.3f} {np.mean(s):8.3f} {np.std(s):8.4f}")
+        print(f"{name:44s} {a:6.3f} {np.mean(s):8.3f} {np.std(s):8.4f}")
 
     best = max(rows)
     print("-" * 56)
-    print(f"최고: {best[1].strip()}  AUC {best[0]:.3f}")
-    print(f"(0.500 = 순위 정보 없음.  은닉상태 직접 프로브는 같은 데이터에서 0.839)")
+    print(f"best: {best[1].strip()}  AUC {best[0]:.3f}")
+    print(f"(0.500 = the ordering carries nothing. A probe straight on the hidden\n states scores 0.839 on the same data.)")
     return 0
 
 

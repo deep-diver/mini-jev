@@ -1,133 +1,150 @@
-# mini-jev: Google Gemma 3 270M 기반 Jev 호환 초고속 의사결정 엔진
+# mini-jev
 
-> **System One Programmatic Decision Engine for Apple Silicon (MPS)**  
-> Inspired by [TypeSafe AI's Jev](https://typesafe.ai)
+> A System One decision interface on Google Gemma 3 270M.
+> Inspired by [TypeSafe AI's Jev](https://typesafe.ai).
 
-`mini-jev`는 구글의 초경량 언어 모델인 **Gemma 3 270M-IT**를 활용하여, TypeSafe Jev의 **"System One" 비생성형(Non-autoregressive) 의사결정 인터페이스**를 로컬 Apple Silicon 환경에서 초고속으로 구동할 수 있도록 구현한 라이브러리입니다.
+Jev does not write text. You give it a state, declare the fields you want, and it
+returns those fields with a probability attached. No generation means no parse
+error and no invented field.
 
----
+This repository builds that interface on a 270M model, and measures honestly
+what it takes to make it work at that size.
 
-## ⚡ 주요 특징
+| Approach | AUC on an unseen task |
+|---|---|
+| Reading Yes/No logits off the stock model | 0.485 |
+| Frozen backbone + a trained pointer head | 0.704 |
+| **LoRA + a trained pointer head** | **0.821** |
 
-1. **텍스트 생성 루프 제거 (Single Forward Pass)**
-   * `generate()`로 JSON 텍스트를 한 글자씩 생성하지 않고, **단 1회의 순전파(Forward pass)로 후보 토큰의 로짓(Logits)만 추출**하여 확률을 계산합니다.
-2. **압도적인 속도 (Apple Silicon MPS 최적화)**
-   * M2 Max 기준 단일 판단에 **~27ms**, 2개 질문 동시 평가에 **~78ms**의 극도로 빠른 응답 속도를 달성합니다.
-3. **TypeSafe Jev 완전 호환 3대 프리미티브 지원**
-   * **`noul`**: 이진(Yes/No) 참/거짓 확률 판단 ($p \in [0.0, 1.0]$)
-   * **`choice`**: 최대 255개 사전 정의 카테고리 분류 및 전 옵션 확률 분포
-   * **`score`**: 루브릭 기반 연속형 수치 점수 및 레벨별 확률 계산
-4. **구조적 타입 에러 제로 (0%)**
-   * 사전 정의된 스키마 내부에서만 값이 결정되므로, JSON 파싱 에러나 없는 필드를 만들어내는 환각이 원천 차단됩니다.
+0.485 is a coin flip. The gap between the first and last row is the whole point.
 
----
+## Start here
 
-## 🚀 빠른 시작 (Quickstart)
+Two editions of the same notebook; the English one prints in English.
 
-### 1. 환경 설정
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/deep-diver/mini-jev/blob/main/notebooks/gemma3_270m_jev_en.ipynb)
+&nbsp;English &nbsp;·&nbsp;
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/deep-diver/mini-jev/blob/main/notebooks/gemma3_270m_jev.ipynb)
+&nbsp;한국어
+
+Sections 1–4 run on a free CPU runtime in about fifteen minutes. Sections 5–7
+need a GPU or a TPU.
+
+## The three primitives
+
+The interface is the same as Jev's, and each call is a single forward pass that
+reads the logits of a fixed set of candidate tokens.
+
+- **`noul`** — a yes probability, `p ∈ [0, 1]`
+- **`choice`** — one option from a declared list, with the distribution over all of them
+- **`score`** — a level on an ordered scale, as an expected value over digit tokens
+
+## What the measurements say
+
+**Reading Yes/No logits off a stock Gemma 3 270M does not work.** Over 1,200
+forward passes it scores AUC 0.575, and on real page text 0.485. The cause is not
+the readout: `Yes` and `No` hold 100% of the probability mass at the answer
+position and the model picks the wrong one. Generation is fine — it writes
+`Paris.` and `4` correctly — and asking for JSON instead returns
+`{"relevant": true}` for all 179 test items. The output channel is saturated and
+no output format gets around it.
+
+**The information is there.** A 641-parameter linear probe on the mid-layer
+residual stream scores around 0.97 leave-one-criterion-out on the same data. The
+model knows; it cannot say.
+
+**So train the readout.** A pointer head scores each option's marker against the
+decision token, which lets the candidate set change per call, and a LoRA adapter
+on the attention projections lets the backbone move with it. 1,803,520 trainable
+parameters — 0.67% of the model.
+
+Held out by construction — the training mix is news, encyclopedia entries, forum
+questions, bank messages and reviews, with no paper text anywhere — the same
+alphaXiv task goes **0.485 → 0.821**. Controlled on everything but the adapter:
+
+| | In-domain dev | Unseen task |
+|---|---|---|
+| head only | 0.695 | 0.475 |
+| LoRA + head | 0.877 | 0.821 |
+
+**Longer is not better.** At 6000 steps in-domain dev rises to 0.887 while the
+unseen task falls to 0.724. Selecting a checkpoint on in-domain dev picks the one
+that transfers worst.
+
+**The negatives decide the result.** A negative is drawn from the same corpus as
+its positive, from a different class. Fill the negatives with boilerplate instead
+and the model learns "has content" rather than "is on topic" — which scores well
+in training and is flat on a page where every item is a paper title.
+
+## Scripts
+
+| | |
+|---|---|
+| [`build_decision_data.py`](scripts/build_decision_data.py) | 43,629 typed requests from nine public corpora |
+| [`pointer_head.py`](scripts/pointer_head.py) | Frozen backbone, trained head, fitted temperature |
+| [`train_lora_tpu.py`](scripts/train_lora_tpu.py) | LoRA + head in JAX, layers folded with `lax.scan` |
+| [`eval_lora.py`](scripts/eval_lora.py) | Scores a checkpoint on the held-out task |
+| [`tpu_lora.sh`](scripts/tpu_lora.sh) | Provisions a TPU and runs the whole cycle |
+| [`prompt_sweep.py`](scripts/prompt_sweep.py) | 16 prompt variants, to show prompting is not the fix |
+| [`auto_labels.py`](scripts/auto_labels.py) | Deriving label words from the criterion |
+| [`eval_alphaxiv.py`](scripts/eval_alphaxiv.py) | Precision and recall against the hand labels |
+
+## Training
 
 ```bash
-conda create -n mini-jev python=3.11 -y
-conda activate mini-jev
-pip install -r requirements.txt
+python3 scripts/build_decision_data.py
+
+python3 scripts/train_lora_tpu.py --model google/gemma-3-270m-it \
+    --data data/decision --out lora.npz \
+    --steps 2000 --batch 32 --max-len 256 --rank 16 --dim 256
+
+python3 scripts/eval_lora.py --ckpt lora.npz --data data/eval/alphaxiv_multi.json
 ```
 
-> **참고**: `google/gemma-3-270m-it`는 Hugging Face 게이트 모델이므로, [Hugging Face 모델 페이지](https://huggingface.co/google/gemma-3-270m-it)에서 라이선스 동의 후 로컬에 토큰이 등록되어 있어야 합니다.
+On a TPU, `scripts/tpu_lora.sh` handles one step per command. It pushes the
+weights from the local Hugging Face cache, so the VM needs no token for the gated
+repository.
 
-### 2. 기본 사용법
-
-```python
-from mini_jev import MiniJevClient
-
-# Apple Silicon MPS에 모델 로드 (bfloat16)
-client = MiniJevClient(model="google/gemma-3-270m-it")
-
-# 비정형 상태 데이터
-state = {
-    "user": "alice",
-    "message": "우리 프로덕션 웹훅 서버가 2시간째 500 에러를 내고 있습니다. 결제가 전혀 안 되고 있어요!"
-}
-
-# Jev 스타일 판단 질문들
-response = client.evaluate(
-    state=state,
-    questions={
-        "is_outage": {
-            "type": "noul",
-            "instructions": "이 메시지가 치명적인 프로덕션 장애나 서비스 다운을 묘사합니까?"
-        },
-        "department": {
-            "type": "choice",
-            "instructions": "어느 부서가 처리해야 합니까?",
-            "criteria": {
-                "billing": "결제 및 청구 문제",
-                "infrastructure": "서버 장애, 프로덕션 다운, API 에러",
-                "general": "일반 문의, 피드백"
-            }
-        },
-        "urgency_score": {
-            "type": "score",
-            "instructions": "긴급도 수준을 평가하세요.",
-            "criteria": [
-                "Low: 영향 없음",
-                "Medium: 일부 기능 제약, 우회 방법 존재",
-                "High: 심각한 영향, 일부 시스템만 가동",
-                "Critical: 완전한 장애 또는 치명적 손실"
-            ]
-        }
-    }
-)
-
-# 결과 확인
-print(response.answers["is_outage"].noul)         # 0.9903 (Yes 99.03%)
-print(response.answers["department"].choice)      # 'infrastructure'
-print(response.answers["urgency_score"].score)    # 2.05 (Level 2~3 집중)
-print(f"지연 시간: {response.usage.latency_ms} ms") # ~79 ms
+```bash
+scripts/tpu_lora.sh create && scripts/tpu_lora.sh setup && scripts/tpu_lora.sh push
+scripts/tpu_lora.sh train && scripts/tpu_lora.sh log
+scripts/tpu_lora.sh eval && scripts/tpu_lora.sh fetch
+scripts/tpu_lora.sh stop
 ```
 
----
+| Hardware | s/step | 2000 steps |
+|---|---|---|
+| TPU v5e-1 (batch 32) | 0.074 | 3 min |
+| T4 (batch 16) | 0.95 | 32 min |
 
-## 📊 Apple Silicon M2 Max 벤치마크 결과
+Being JAX, the same code runs on both. About ten minutes end to end on a TPU,
+including provisioning.
 
-`benchmark.py` 실행 결과 (50회 반복 측정, 2개 복합 질문 동시 평가 기준):
+## Evaluation data
 
-| 지표 | 측정값 (ms) | 비고 |
-| :--- | :--- | :--- |
-| **평균 지연 시간 (Mean)** | **78.17 ms** | 질문당 약 39 ms |
-| **중간값 (P50)** | **77.38 ms** | 매우 안정적인 레이턴시 분포 |
-| **P95 지연 시간** | **82.46 ms** | 스파이크 없음 |
-| **최소 지연 시간 (Min)** | **75.83 ms** | |
-| **처리량 (Throughput)** | **12.8 queries/sec** | 단일 스트림 기준 |
-| **단일 포워드 패스 속도** | **~27.2 ms** | MPS `bfloat16` 연산 |
+[`data/eval/`](data/eval) holds 179 alphaXiv paper titles labelled by hand
+against three criteria — reinforcement learning and agents, video and images,
+mathematics and physics. Nothing resembling it appears in training, which is what
+makes it worth measuring against. Every score is in
+`alphaxiv_labels.json` alongside its label, so a run can be audited.
 
----
-
-## 🧠 왜 Jev는 RLCD(강화학습)를 필요로 했는가?
-
-`mini-jev`를 구현하며 얻은 중요한 통찰:
-* **기본 LLM의 사전 편향(Prior Bias)**:
-  학습되지 않은 일반 LLM(Gemma 3 270M 포함)은 객관식에서 첫 번째 보기(A)나 "Yes" 토큰의 빈도 사전 확률(Unigram Frequency)이 자연어 특성상 매우 높습니다.
-* **Jev의 해결책**:
-  TypeSafe Jev가 일반 프롬프트 LLM과 구별되는 이유는 바로 **RLCD (Reinforcement Learning for Calibrated Decisions)**로 모델 가중치를 의사결정 확률 보정에 직접 최적화했기 때문입니다.
-* **mini-jev의 고도화 방향**:
-  1. **Contextual Calibration**: Null Prompt (`State: N/A`)의 로짓을 차감하여 기본 편향 상쇄
-  2. **LoRA / Head Fine-tuning**: 270M 모델에 가벼운 태스크별 분류 헤드 또는 LoRA 튜닝 적용
-
----
-
-## 📁 프로젝트 구조
+## Layout
 
 ```
-mini-jev/
-├── mini_jev/
-│   ├── __init__.py       # 패키지 진입점
-│   ├── schemas.py        # Noul, Choice, Score Pydantic 스키마 정의
-│   ├── engine.py         # Gemma 3 모델 로드 및 Single-Pass Logit Scorer
-│   └── client.py         # TypeSafe Jev 호환 MiniJevClient
-├── examples/
-│   ├── basic_usage.py    # 고객 지원 티켓 분류 및 긴급도 평가 데모
-│   └── safety_guard.py   # AI 에이전트 터미널 명령어 위험성 사전 검사 데모
-├── benchmark.py          # Apple Silicon MPS 성능 측정 벤치마크
-├── requirements.txt      # 의존성 목록
-└── README.md
+notebooks/
+  _source.txt, _source_en.txt    prose and code, reviewable in a diff
+  build.py                       emits the .ipynb files
+  gemma3_270m_jev*.ipynb         generated; do not edit directly
+scripts/                         data, training, evaluation, TPU
+data/eval/                       179 titles x 3 criteria, hand labelled
+data/decision/lora_best.npz      the trained adapter and head, 6.4 MB
 ```
+
+Editing a notebook means editing its `_source` file and running
+`python3 notebooks/build.py`.
+
+## Requirements
+
+`transformers`, `torch` and `numpy` for the notebook; `jax`, `optax` and
+`safetensors` for training. Gemma 3 270M is gated — accept the licence on the
+[model page](https://huggingface.co/google/gemma-3-270m-it) first.

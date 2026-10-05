@@ -56,11 +56,11 @@ def main():
         return 1
     s = d["scores"]
 
-    print(f"{len(items)}편 · 양성 {sum(y)} ({sum(y) / len(y):.0%}) · "
-          f"{d['elapsed_ms']} ms ({d['per_decision_ms']} ms/편)\n")
-    print(f"랭킹 품질:  AUC {auc(s, y):.3f}\n")
+    print(f"{len(items)} titles · {sum(y)} positive ({sum(y) / len(y):.0%}) · "
+          f"{d['elapsed_ms']} ms ({d['per_decision_ms']} ms each)\n")
+    print(f"ranking quality: AUC {auc(s, y):.3f}\n")
 
-    print(f"{'임계값':>7} {'매치':>5} {'정밀도':>7} {'재현율':>7} {'F1':>6}")
+    print(f"{'thresh':>7} {'kept':>5} {'prec':>7} {'recall':>7} {'F1':>6}")
     for th in (0.20, 0.25, 0.30, 0.35, 0.40, 0.50, 0.60):
         tp = sum(1 for a, t in zip(s, y) if a >= th and t)
         fp = sum(1 for a, t in zip(s, y) if a >= th and not t)
@@ -68,21 +68,21 @@ def main():
         p = tp / (tp + fp) if tp + fp else 0.0
         r = tp / (tp + fn) if tp + fn else 0.0
         f1 = 2 * p * r / (p + r) if p + r else 0.0
-        mark = "  <- 현재 설정" if abs(th - 0.30) < 1e-9 else ""
+        mark = "  <- in use" if abs(th - 0.30) < 1e-9 else ""
         print(f"{th:7.2f} {tp + fp:5d} {p:7.1%} {r:7.1%} {f1:6.2f}{mark}")
 
     ranked = sorted(zip(s, y, [it["title"] for it in items]), reverse=True)
-    print("\n상위 15편 (O = 사람 라벨상 맞음):")
+    print("\ntop 15 (O = correct per the hand labels):")
     for a, t, title in ranked[:15]:
         print(f"   {a:.2f}  {'O' if t else 'X'}  {title[:68]}")
-    print("\n놓친 양성 중 점수가 가장 낮은 8편:")
+    print("\nthe 8 lowest-scoring positives it missed:")
     for a, t, title in sorted((x for x in ranked if x[1]))[:8]:
         print(f"   {a:.2f}     {title[:68]}")
 
     json.dump([{"i": i, "title": items[i]["title"], "label": int(y[i]),
                 "score": s[i]} for i in range(len(items))],
               open(LABELS, "w"), ensure_ascii=False, indent=1)
-    print(f"\n라벨+점수 -> {LABELS}  (감사하실 수 있게 전부 저장)")
+    print(f"\nlabels and scores -> {LABELS}  (all of them, so the run can be audited)")
     return 0
 
 

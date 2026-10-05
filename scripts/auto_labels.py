@@ -116,11 +116,11 @@ def main():
         return (f"Label each paper title with {words[0].lower()} or other.\n\n"
                 + block + f'Title: "{t}"\nLabel:')
 
-    BUILDERS = {"0-shot 패턴": p_zero,
-                "형식 shot (무관 주제)": p_format,
-                "형식 shot + 한 줄 지시": p_stated}
+    BUILDERS = {"0-shot pattern": p_zero,
+                "format shots (unrelated topic)": p_format,
+                "format shots + one instruction": p_stated}
 
-    print(f"{len(titles)}편 · {args.model} · {device}\n")
+    print(f"{len(titles)} titles · {args.model} · {device}\n")
     table = {}
     for key, c in d["criteria"].items():
         words = criterion_words(c["text"])
@@ -128,7 +128,8 @@ def main():
         y = np.zeros(len(titles), dtype=bool)
         y[c["positive"]] = True
         print(f'[{key}] "{c["text"]}"')
-        print(f'     자동 추출 라벨어: {words}  (양성 토큰 {len(pos)}개 vs "other")')
+        print(f'     label words from the criterion: {words}  '
+              f'({len(pos)} positive tokens vs "other")')
         for name, build in BUILDERS.items():
             s = score([build(t, words) for t in titles], pos, OTHER)
             a = auc(s, y)
@@ -136,14 +137,15 @@ def main():
             print(f"     {name:22s} AUC {a:.3f}")
         print()
 
-    print(f"{'프롬프트':24s} " + "".join(f"{k:>8s}" for k in d["criteria"]) + f"{'평균':>8s}")
+    print(f"{'prompt':30s} " + "".join(f"{k:>8s}" for k in d["criteria"]) + f"{'mean':>8s}")
     print("-" * 58)
     for name, per in table.items():
         vals = [per[k] for k in d["criteria"]]
         print(f"{name:24s} " + "".join(f"{v:8.3f}" for v in vals)
               + f"{np.mean(vals):8.3f}")
     print("-" * 58)
-    print("참고: 손으로 고른 RL/other 는 기준 A 에서 0.829, 은닉상태 프로브는 0.839")
+    print("for reference: hand-picked RL/other scores 0.829 on A; a probe on the "
+          "hidden states scores 0.839")
     return 0
 
 

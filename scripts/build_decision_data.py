@@ -179,10 +179,10 @@ def main():
     by_type = {}
     for r in recs:
         by_type[r["type"]] = by_type.get(r["type"], 0) + 1
-    print("\n타입별:", by_type)
+    print("\nby type:", by_type)
     noul = [r for r in recs if r["type"] == "noul"]
-    print(f"noul 양성 비율 {sum(1 for r in noul if r['gold'] == 0) / len(noul):.1%}")
-    print(f"옵션 수 분포: 최대 {max(len(r['options']) for r in recs)}")
+    print(f"noul positive rate {sum(1 for r in noul if r['gold'] == 0) / len(noul):.1%}")
+    print(f"largest option count: {max(len(r['options']) for r in recs)}")
     return 0
 
 

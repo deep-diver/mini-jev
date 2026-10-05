@@ -280,7 +280,7 @@ def eval_alphaxiv(args):
             p = torch.softmax(head(torch.tensor(st[L]), torch.tensor(mask)) / T, -1)
         return p[:, want].tolist()
 
-    print(f"{'기준':4s} {'한 방향':>8s} {'뒤집음':>8s} {'양방향 평균':>12s}")
+    print(f"{'crit':4s} {'as given':>10s} {'reversed':>10s} {'averaged':>10s}")
     print("-" * 38)
     rows = []
     for k, c in data["criteria"].items():
@@ -293,11 +293,11 @@ def eval_alphaxiv(args):
         print(f"{k:4s} {rows[-1][0]:8.3f} {rows[-1][1]:8.3f} {rows[-1][2]:12.3f}")
     m = np.array(rows).mean(0)
     print("-" * 38)
-    print(f"{'평균':4s} {m[0]:8.3f} {m[1]:8.3f} {m[2]:12.3f}")
-    print("\n비교 (같은 179편):")
-    print("   zero-shot Yes/No 로짓      0.564 / 0.588 / 0.304  (평균 0.485)")
-    print("   배포된 선형 프로브            0.481  (기준 A)")
-    print("   개방어휘 프롬프트 (jev 아님)    0.753 / 0.799 / 0.854  (평균 0.802)")
+    print(f"{'mean':4s} {m[0]:10.3f} {m[1]:10.3f} {m[2]:10.3f}")
+    print("\nfor comparison, same 179 titles:")
+    print("   zero-shot Yes/No logits     0.564 / 0.588 / 0.304   mean 0.485")
+    print("   the shipped linear probe    0.481 on criterion A")
+    print("   open-vocabulary prompting   0.753 / 0.799 / 0.854   mean 0.802 (not Jev)")
     return 0
 
 
@@ -342,7 +342,7 @@ def main():
             head, dev_acc = fit_head(X[tr], mask[tr], gold[tr],
                                      X[dev], mask[dev], gold[dev],
                                      args.dim, args.epochs)
-            print(f"  layer {L:2d}   dev 정확도 {dev_acc:.3f}")
+            print(f"  layer {L:2d}   dev accuracy {dev_acc:.3f}")
             if best is None or dev_acc > best[1]:
                 best = (L, dev_acc, head)
         L, dev_acc, head = best
@@ -354,10 +354,10 @@ def main():
             te_logits = head(X[te], mask[te]) / T
             p = torch.softmax(te_logits, -1)
         acc = (p.argmax(-1) == gold[te]).float().mean().item()
-        print(f"\n선택: layer {L}, temperature {T:.2f}")
-        print(f"테스트 정확도 {acc:.3f} · ECE {ece(p, gold[te]):.3f} "
+        print(f"\nchosen: layer {L}, temperature {T:.2f}")
+        print(f"test accuracy {acc:.3f} · ECE {ece(p, gold[te]):.3f} "
               f"· Brier {brier(p, gold[te], mask[te]):.3f}")
-        print(f"{'소스':12s} {'건수':>5s} {'정확도':>7s}")
+        print(f"{'source':12s} {'n':>5s} {'acc':>7s}")
         for s_ in sorted(set(src)):
             m = torch.tensor([src[i] == s_ for i in te.tolist()])
             if m.any():
@@ -365,7 +365,7 @@ def main():
                       f"{(p.argmax(-1)[m] == gold[te][m]).float().mean():7.3f}")
         torch.save({"state": head.state_dict(), "layer": L, "dim": args.dim,
                     "temperature": T}, os.path.join(OUT, "head.pt"))
-        print(f"\n{sum(q.numel() for q in head.parameters()):,} 파라미터 "
+        print(f"\n{sum(q.numel() for q in head.parameters()):,} parameters "
               f"-> {OUT}/head.pt")
         return 0
 
